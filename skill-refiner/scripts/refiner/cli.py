@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -11,7 +12,8 @@ from .standards import lint
 
 MAX_REPAIR_ROUNDS = 3
 MAX_PLANNING_ATTEMPTS = 4
-MAX_WALL_CLOCK_SECONDS = 3600
+MAX_WALL_CLOCK_SECONDS = 7200
+MAX_COMPARE_SECONDS = 3600
 MAX_AGENT_CALLS = 128
 MAX_EVALUATIONS = 200
 
@@ -36,9 +38,10 @@ def workflow_options(parser, *, creating=False):
     parser.add_argument("--max-cases", type=int, default=8 if creating else 4)
     parser.add_argument("--acceptance-cases", type=int, default=6 if creating else 2)
     parser.add_argument("--parallelism", type=int, default=2)
-    parser.add_argument("--timeout", type=int, default=300 if creating else 240)
+    parser.add_argument("--timeout", type=int, default=None,
+                        help="Optional per-call fallback timeout; the run deadline is the default bound")
     parser.add_argument("--max-seconds", type=int, default=1800 if creating else 1200,
-                        help="Total wall-clock budget; hard cap 3600 seconds")
+                        help="Total wall-clock budget; hard cap 7200 seconds")
     parser.add_argument("--max-agent-calls", type=int, default=24 if creating else 16)
     parser.add_argument("--max-evaluations", type=int, default=80 if creating else 40,
                         help="Case-executor evaluations; hard cap 200")
@@ -71,6 +74,20 @@ def main(argv=None):
                         help="Create the reviewed design and frozen test checklist, then stop before target tests")
     create.add_argument("--destination", help="New destination populated only after successful multi-engine acceptance")
     workflow_options(create, creating=True)
+    migrate = subs.add_parser("import-create-inputs", help="Validate and import only a completed create inputs checkpoint into a new workspace")
+    migrate.add_argument("--source-run", required=True)
+    migrate.add_argument("--controller-archive", help="Exact source controller archive; required unless revalidating the completed checkpoint with the current controller")
+    migrate.add_argument("--revalidate-source-checkpoint", action="store_true",
+                         help="When the exact source controller archive is unavailable, revalidate the completed inputs checkpoint and carried evidence with the current controller; uncompleted stages are not trusted")
+    migrate.add_argument("--process-reconciliation", help="External evidence of old call termination and a process check")
+    migrate.add_argument("--supplement", help="An explicit new UTF-8 requirements file to append after validating old inputs")
+    migrate.add_argument("--supplement-source", help="Origin of the user's explicit supplementary business decision")
+    migrate.add_argument("--carry-analysis-feedback", action="store_true", help="Carry verified, rejected analysis and independent-review evidence to the continuation")
+    migrate.add_argument("--carry-technical-clarification", action="store_true", help="Also carry a verified unfinished clarification chain for technical triage")
+    migrate.add_argument("--prior-seconds", type=float, required=True)
+    migrate.add_argument("--prior-agent-calls", type=int, required=True)
+    migrate.add_argument("--prior-evaluations", type=int, required=True)
+    workflow_options(migrate, creating=True)
     compare = subs.add_parser("compare", help="Run one frozen suite against all configured engines; no planning or repair")
     compare.add_argument("target")
     compare.add_argument("--suite", required=True, help="Earlier run directory containing locked plans")
@@ -78,18 +95,22 @@ def main(argv=None):
     compare.add_argument("--output")
     compare.add_argument("--skill-up")
     compare.add_argument("--parallelism", type=int, default=2)
-    compare.add_argument("--timeout", type=int, default=240)
+    compare.add_argument("--timeout", type=int, default=None,
+                         help="Optional per-call fallback timeout; the comparison deadline is the default bound")
     compare.add_argument("--max-seconds", type=int, default=1200)
     compare.add_argument("--max-evaluations", type=int, default=40)
     args = parser.parse_args(argv)
     try:
+        args.launch_context = json.loads(os.environ.get("SKILL_REFINER_LAUNCH_CONTEXT", "{}"))
+        if not isinstance(args.launch_context, dict):
+            raise RefinerError("Invalid launcher configuration provenance")
         if args.command == "bootstrap":
             print(install(args.directory))
             return 0
         if args.command == "doctor":
             if args.config:
                 from .diagnostics import inspect_config
-                result = inspect_config(args.config)
+                result = inspect_config(args.config, launch_context=args.launch_context)
                 print(json.dumps(result, ensure_ascii=False, indent=2))
                 return 0 if result["ready"] else 1
             from .skillup import locate
@@ -120,12 +141,15 @@ def main(argv=None):
             for key in ("parallelism", "timeout", "max_seconds", "max_evaluations"):
                 if getattr(args, key) < 1:
                     raise RefinerError(f"--{key.replace('_', '-')} must be positive")
-            if args.max_seconds > MAX_WALL_CLOCK_SECONDS or args.max_evaluations > MAX_EVALUATIONS:
-                raise RefinerError("compare is bounded to 3600 seconds and 200 case-executor evaluations")
+            if args.max_seconds > MAX_COMPARE_SECONDS or args.max_evaluations > MAX_EVALUATIONS:
+                raise RefinerError(f"compare is bounded to {MAX_COMPARE_SECONDS} seconds and 200 case-executor evaluations")
             from .compare import run as compare_run
             return compare_run(args)
         for key in ("max_rounds", "planning_attempts", "parallelism", "timeout", "max_seconds", "max_agent_calls", "max_evaluations"):
-            if getattr(args, key) < 1:
+            value = getattr(args, key)
+            if value is None and key == "timeout":
+                continue
+            if value < 1:
                 raise RefinerError(f"--{key.replace('_', '-')} must be positive")
         if args.max_rounds > MAX_REPAIR_ROUNDS:
             raise RefinerError(f"--max-rounds cannot exceed {MAX_REPAIR_ROUNDS}")
@@ -139,6 +163,11 @@ def main(argv=None):
             raise RefinerError(f"--max-evaluations cannot exceed {MAX_EVALUATIONS}")
         if not 2 <= args.max_cases <= 30 or not 2 <= args.acceptance_cases <= 30:
             raise RefinerError("Case limits must be between 2 and 30")
+        if args.command == "import-create-inputs":
+            from .checkpoint_migration import import_inputs
+            result = import_inputs(args)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if args.command == "create":
             from .creation import run
         else:

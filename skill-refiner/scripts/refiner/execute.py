@@ -41,7 +41,7 @@ def main():
             # External adapters implement the existing skill-up file protocol.
             argv = [part.replace("{input_file}", str(Path(sys.argv[2]).resolve())).replace(
                     "{output_file}", str(output.resolve())) for part in profile["command"]]
-            code, stdout, stderr, _ = run_process(argv, cwd=cwd, timeout=request.get("timeout_seconds", 240))
+            code, stdout, stderr, _ = run_process(argv, cwd=cwd, timeout=request.get("timeout_seconds"))
             if code or not output.exists():
                 raise RuntimeError(f"Command adapter failed (exit {code}) or did not write SessionResult")
             verify_skill(skill_root, expected)
@@ -69,7 +69,8 @@ def main():
                 'observer or installed implementation. These are measurement directions, not business repairs.')
         stage = "execution"
         before_paths = workspace_paths(cwd)
-        result = execute(profile, prompt, cwd, request.get("timeout_seconds", 240))
+        result = execute(profile, prompt, cwd, request.get("timeout_seconds"),
+                         target_evaluation=profile["backend"] in {"codex", "codex_subagent"})
         stage = "post_execution_source_check"
         verify_skill(skill_root, expected)
         verify_skill(cwd, helpers)

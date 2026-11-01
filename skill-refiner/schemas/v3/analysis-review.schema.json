@@ -1,0 +1,344 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "approved",
+    "issues",
+    "requirement_assessments",
+    "scenario_assessments",
+    "schema_version",
+    "context_scope_assessment",
+    "workflow_assessments",
+    "risk_assessments",
+    "dependencies_assessed",
+    "blocking_decisions_actionable",
+    "revision_assessments"
+  ],
+  "properties": {
+    "approved": {
+      "type": "boolean"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "requirement_assessments": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requirement_id",
+          "grounded",
+          "acceptance_criteria_atomic",
+          "criteria_observable",
+          "basis"
+        ],
+        "properties": {
+          "requirement_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "grounded": {
+            "type": "boolean"
+          },
+          "acceptance_criteria_atomic": {
+            "type": "boolean"
+          },
+          "criteria_observable": {
+            "type": "boolean"
+          },
+          "basis": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "scenario_assessments": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "detail_executable",
+          "risk_coverage_complete",
+          "traceability_complete",
+          "basis"
+        ],
+        "properties": {
+          "scenario_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "detail_executable": {
+            "type": "boolean"
+          },
+          "risk_coverage_complete": {
+            "type": "boolean"
+          },
+          "traceability_complete": {
+            "type": "boolean"
+          },
+          "basis": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "schema_version": {
+      "const": "skill-refiner.analysis-review/v3"
+    },
+    "context_scope_assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent_grounded",
+        "actors_complete",
+        "scope_clear",
+        "constraints_complete",
+        "basis"
+      ],
+      "properties": {
+        "intent_grounded": {
+          "type": "boolean"
+        },
+        "actors_complete": {
+          "type": "boolean"
+        },
+        "scope_clear": {
+          "type": "boolean"
+        },
+        "constraints_complete": {
+          "type": "boolean"
+        },
+        "basis": {
+          "type": "string",
+          "minLength": 12
+        }
+      }
+    },
+    "workflow_assessments": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workflow_id",
+          "order_and_actors_clear",
+          "inputs_outputs_complete",
+          "completion_and_failure_testable",
+          "requirement_traceable",
+          "basis"
+        ],
+        "properties": {
+          "workflow_id": {
+            "type": "string"
+          },
+          "order_and_actors_clear": {
+            "type": "boolean"
+          },
+          "inputs_outputs_complete": {
+            "type": "boolean"
+          },
+          "completion_and_failure_testable": {
+            "type": "boolean"
+          },
+          "requirement_traceable": {
+            "type": "boolean"
+          },
+          "basis": {
+            "type": "string",
+            "minLength": 12
+          }
+        }
+      }
+    },
+    "risk_assessments": {
+      "type": "array",
+      "minItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "dimension",
+          "applicability_justified",
+          "scenario_links_complete",
+          "basis"
+        ],
+        "properties": {
+          "dimension": {
+            "enum": [
+              "input_variation",
+              "workflow_state",
+              "role_permission",
+              "dependency_failure",
+              "cross_requirement",
+              "side_effect",
+              "retry_recovery",
+              "idempotency",
+              "ambiguity_conflict",
+              "asset_handling",
+              "safety_boundary",
+              "other"
+            ]
+          },
+          "applicability_justified": {
+            "type": "boolean"
+          },
+          "scenario_links_complete": {
+            "type": "boolean"
+          },
+          "basis": {
+            "type": "string",
+            "minLength": 12
+          }
+        }
+      }
+    },
+    "dependencies_assessed": {
+      "type": "boolean"
+    },
+    "blocking_decisions_actionable": {
+      "type": "boolean"
+    },
+    "revision_assessments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "id",
+          "before_sha256",
+          "after_sha256",
+          "outcome",
+          "reason",
+          "source_evidence",
+          "replacement_refs"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "requirement",
+              "scenario"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "before_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "after_sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome": {
+            "enum": [
+              "equivalent",
+              "justified_change",
+              "coverage_gap",
+              "uncertain",
+              "excluded_by_source"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 8
+          },
+          "source_evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source_id",
+                "quote"
+              ],
+              "properties": {
+                "source_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "quote": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "replacement_refs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "id"
+              ],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "requirement",
+                    "acceptance_criterion",
+                    "scenario"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "approved": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "issues": {
+            "minItems": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "issues": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.analysis-review-v3",
+  "x-schema-version": "v3"
+}

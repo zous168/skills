@@ -18,9 +18,9 @@ archives under `.refiner-runs/`, downloaded tools and virtual environments are
 excluded from Git. Evidence links into `.refiner-runs/` in the detailed historical
 reports resolve only in the original verification workspace.
 
-The separate [CSP Media project](csp-media/README.md) keeps its Skill source,
+The separate [CSP Media project](csp-media-skill/README.md) keeps its Skill source,
 project-level fake-gateway tests and reproducible build together. Its installable
-Skill artifact is `csp-media/dist/csp-media/`.
+Skill artifact is `csp-media-skill/dist/csp-media/`.
 
 The historical 0.2 integrated real self-audit ended `unchanged` with complete Codex/native-child workflows. It includes a native Agent-generated repair and explicit engineering integration, with frozen suites and raw evidence. See [SELF-REFINEMENT.md](SELF-REFINEMENT.md) for results, earlier failed attempts and limits.
 

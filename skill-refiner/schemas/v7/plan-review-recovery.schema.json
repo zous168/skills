@@ -1,0 +1,284 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "approved",
+    "issues",
+    "case_contracts",
+    "stage_contracts_assessed",
+    "stage_contracts_complete",
+    "schema_paths_safe",
+    "validator_lifecycle_covered",
+    "execution_plan_assessed",
+    "execution_plan_complete",
+    "dependency_graph_valid",
+    "concurrency_safe",
+    "failure_recovery_bounded",
+    "step_assessments",
+    "recovery_assessments",
+    "revision_targets"
+  ],
+  "properties": {
+    "approved": {
+      "type": "boolean"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "case_contracts": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "case_id",
+          "installed_source_unchanged",
+          "fixture_contract_consistent",
+          "response_contract_consistent",
+          "trace_checks_observable",
+          "scenario_consistent",
+          "requirement_trace_consistent",
+          "expected_outcome_consistent",
+          "machine_checks_consistent",
+          "matrix_complete",
+          "asset_audit_consistent",
+          "positive_controls_validated",
+          "negative_controls_targeted",
+          "basis",
+          "acceptance_criteria_traceable",
+          "scenario_detail_complete",
+          "risk_coverage_complete"
+        ],
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "installed_source_unchanged": {
+            "type": "boolean"
+          },
+          "fixture_contract_consistent": {
+            "type": "boolean"
+          },
+          "response_contract_consistent": {
+            "type": "boolean"
+          },
+          "trace_checks_observable": {
+            "type": "boolean"
+          },
+          "scenario_consistent": {
+            "type": "boolean"
+          },
+          "requirement_trace_consistent": {
+            "type": "boolean"
+          },
+          "expected_outcome_consistent": {
+            "type": "boolean"
+          },
+          "machine_checks_consistent": {
+            "type": "boolean"
+          },
+          "matrix_complete": {
+            "type": "boolean"
+          },
+          "asset_audit_consistent": {
+            "type": "boolean"
+          },
+          "positive_controls_validated": {
+            "type": "boolean"
+          },
+          "negative_controls_targeted": {
+            "type": "boolean"
+          },
+          "basis": {
+            "type": "string",
+            "minLength": 12
+          },
+          "acceptance_criteria_traceable": {
+            "type": "boolean"
+          },
+          "scenario_detail_complete": {
+            "type": "boolean"
+          },
+          "risk_coverage_complete": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "stage_contracts_assessed": {
+      "type": "boolean"
+    },
+    "stage_contracts_complete": {
+      "type": "boolean"
+    },
+    "schema_paths_safe": {
+      "type": "boolean"
+    },
+    "validator_lifecycle_covered": {
+      "type": "boolean"
+    },
+    "execution_plan_assessed": {
+      "type": "boolean"
+    },
+    "execution_plan_complete": {
+      "type": "boolean"
+    },
+    "dependency_graph_valid": {
+      "type": "boolean"
+    },
+    "concurrency_safe": {
+      "type": "boolean"
+    },
+    "failure_recovery_bounded": {
+      "type": "boolean"
+    },
+    "step_assessments": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step_id",
+          "goal_actions_clear",
+          "inputs_outputs_evidenced",
+          "requirement_case_traceable",
+          "dependencies_valid",
+          "agent_scope_safe",
+          "exit_and_recovery_clear",
+          "basis"
+        ],
+        "properties": {
+          "step_id": {
+            "type": "string"
+          },
+          "goal_actions_clear": {
+            "type": "boolean"
+          },
+          "inputs_outputs_evidenced": {
+            "type": "boolean"
+          },
+          "requirement_case_traceable": {
+            "type": "boolean"
+          },
+          "dependencies_valid": {
+            "type": "boolean"
+          },
+          "agent_scope_safe": {
+            "type": "boolean"
+          },
+          "exit_and_recovery_clear": {
+            "type": "boolean"
+          },
+          "basis": {
+            "type": "string",
+            "minLength": 12
+          }
+        }
+      }
+    },
+    "recovery_assessments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "change_id",
+          "preserves_requirements",
+          "reason"
+        ],
+        "properties": {
+          "change_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "preserves_requirements": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 12
+          }
+        }
+      }
+    },
+    "revision_targets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "issue_index",
+          "case_ids",
+          "requirement_ids",
+          "scenario_ids",
+          "scope_known",
+          "basis"
+        ],
+        "properties": {
+          "issue_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "case_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "requirement_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "scenario_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "scope_known": {
+            "type": "boolean"
+          },
+          "basis": {
+            "type": "string",
+            "minLength": 12
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "approved": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "issues": {
+            "minItems": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "issues": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ]
+}

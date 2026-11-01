@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.plan-revision-context/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "base_plan_sha256",
+    "feedback",
+    "feedback_sources",
+    "targeted_case_ids",
+    "case_changes",
+    "requirements_changed",
+    "execution_plan_changed"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "skill-refiner.plan-revision-context/v1"
+    },
+    "base_plan_sha256": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ]
+    },
+    "feedback": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "feedback_sources": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "targeted_case_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      }
+    },
+    "case_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "case_id",
+          "before",
+          "after"
+        ],
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "before": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "after": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "requirements_changed": {
+      "type": "boolean"
+    },
+    "execution_plan_changed": {
+      "type": "boolean"
+    }
+  }
+}

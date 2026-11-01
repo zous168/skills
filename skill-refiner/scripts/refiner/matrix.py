@@ -11,7 +11,7 @@ from .skillup import SkillUp
 
 
 class Matrix:
-    def __init__(self, profiles, work, skill_up=None, timeout=240, parallelism=2):
+    def __init__(self, profiles, work, skill_up=None, timeout=None, parallelism=2):
         self.profiles, self.work = profiles, Path(work)
         self.backends = [(p, SkillUp(skill_up, engine_config=skillup_engine(p, self.work / "profiles"),
                                     timeout=timeout, parallelism=parallelism)) for p in profiles]
@@ -20,6 +20,7 @@ class Matrix:
         self.max_evaluations = 50
         self.deadline = None
         self.progress_callback = None
+        self.case_progress_context = None
 
     def evaluate(self, target, cases, run_dir, *, selected=None, existing=True):
         started, rows, engines = time.monotonic(), [], []
@@ -42,12 +43,16 @@ class Matrix:
                             if any('python_probe' in c.get('helpers',[]) for c in chosen) else {}})
             backend.max_evaluations = backend.evaluations + max(0, self.max_evaluations - self.evaluations)
             backend.deadline = self.deadline
+            backend.probe_budget = getattr(self, 'probe_budget', None)
             before = backend.evaluations
             def relay_progress(elapsed, remaining, case_count, engine_label, child_evaluations):
                 if self.progress_callback:
                     used = self.evaluations + max(0, child_evaluations - before)
                     self.progress_callback(elapsed, remaining, case_count, profile["id"], used)
             backend.progress_callback = relay_progress
+            backend.case_progress_context = (
+                {**self.case_progress_context, "executor": profile["id"]}
+                if isinstance(self.case_progress_context, dict) else None)
             print(__import__("json").dumps({"stage": "engine", "executor": profile["id"], "cases": len(chosen)}), flush=True)
             result = None
             try:
@@ -70,6 +75,7 @@ class Matrix:
                     result["passed"] = False
                 result["error"] = str(exc)
             finally:
+                backend.case_progress_context = None
                 self.evaluations += backend.evaluations - before
             result.update(executor=profile["id"], profile=profile, suite_sha256=frozen)
             write_json(engine_dir / "summary.json", result)

@@ -12,10 +12,28 @@ import jsonschema
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_CATALOG = {
+    "skill-refiner.clarification-recovery": ("v1", "schemas/v1/clarification-recovery.schema.json", "json-schema"),
+    "skill-refiner.target-obligations": ("v1", "schemas/v1/target-obligations.schema.json", "json-schema"),
+    "skill-refiner.analysis-v4": ("v4", "schemas/v4/analysis.schema.json", "json-schema"),
+    "skill-refiner.analysis-review-v4": ("v4", "schemas/v4/analysis-review.schema.json", "json-schema"),
+    "skill-refiner.technical-recovery": ("v1", "schemas/v1/technical-recovery.schema.json", "json-schema"),
+    "skill-refiner.technical-triage": ("v1", "schemas/v1/technical-triage.schema.json", "json-schema"),
+    "skill-refiner.technical-coverage": ("v1", "schemas/v1/technical-coverage.schema.json", "json-schema"),
+    "skill-refiner.analysis-recovery": ("v1", "schemas/v1/analysis-recovery.schema.json", "json-schema"),
+    "skill-refiner.analysis-revision-delta": ("v1", "schemas/v1/analysis-revision-delta.schema.json", "json-schema"),
+    "skill-refiner.analysis-revision-delta-v2": ("v2", "schemas/v2/analysis-revision-delta.schema.json", "json-schema"),
+    "skill-refiner.clarification-review": ("v1", "schemas/v1/clarification-review.schema.json", "json-schema"),
+    "skill-refiner.checkpoint-migration": ("v1", "schemas/v1/checkpoint-migration.schema.json", "json-schema"),
+    "skill-refiner.checkpoint-migration-v2": ("v2", "schemas/v2/checkpoint-migration.schema.json", "json-schema"),
+    "skill-refiner.checkpoint-migration-v3": ("v3", "schemas/v3/checkpoint-migration.schema.json", "json-schema"),
+    "skill-refiner.evaluation-cost": ("v1", "schemas/v1/evaluation-cost.schema.json", "json-schema"),
+    "skill-refiner.process-execution": ("v1", "schemas/v1/process-execution.schema.json", "json-schema"),
+    "skill-refiner.runtime-preflight": ("v1", "schemas/v1/runtime-preflight.schema.json", "json-schema"),
     "skill-refiner.stages": ("v2", "schemas/v2/stages.schema.json", "json-schema"),
     "skill-refiner.artifact-record": ("v1", "schemas/v1/artifact-record.schema.json", "json-schema"),
     "skill-refiner.stage-artifact-contract": ("v1", "schemas/v1/stage-artifact-contract.schema.json", "json-schema"),
     "skill-refiner.json-object": ("v1", "schemas/v1/json-object.schema.json", "json-schema"),
+    "skill-refiner.static-findings": ("v1", "schemas/v1/static-findings.schema.json", "json-schema"),
     "skill-refiner.markdown": ("v1", "schemas/v1/markdown.schema.json", "json-schema-text"),
     "skill-refiner.utf8-text": ("v1", "schemas/v1/utf8-text.schema.json", "json-schema-text"),
     "skill-refiner.unified-diff": ("v1", "schemas/v1/unified-diff.schema.json", "json-schema-text"),
@@ -24,16 +42,27 @@ SCHEMA_CATALOG = {
     "skill-refiner.plan-v3": ("v3", "schemas/v3/plan.schema.json", "json-schema"),
     "skill-refiner.plan-v4": ("v4", "schemas/v4/plan.schema.json", "json-schema"),
     "skill-refiner.plan-v5": ("v5", "schemas/v5/plan.schema.json", "json-schema"),
+    "skill-refiner.plan-v6": ("v6", "schemas/v6/plan.schema.json", "json-schema"),
+    "skill-refiner.plan-v7": ("v7", "schemas/v7/plan.schema.json", "json-schema"),
+    "skill-refiner.plan-v8": ("v8", "schemas/v8/plan.schema.json", "json-schema"),
+    "skill-refiner.plan-review-v8": ("v8", "schemas/v8/plan-review.schema.json", "json-schema"),
+    "skill-refiner.plan-review-recovery-v8": ("v8", "schemas/v8/plan-review-recovery.schema.json", "json-schema"),
+    "skill-refiner.response-applicability-analysis-v1": ("v7", "schemas/v7/response-applicability-analysis.schema.json", "json-schema"),
+    "skill-refiner.response-applicability-decision-v1": ("v7", "schemas/v7/response-applicability-decision.schema.json", "json-schema"),
+    "skill-refiner.response-contract-migration-v1": ("v7", "schemas/v7/response-contract-migration.schema.json", "json-schema"),
     "skill-refiner.execution-plan": ("v1", "schemas/v1/execution-plan.schema.json", "json-schema"),
     "skill-refiner.plan-review-v2": ("v2", "schemas/v2/plan-review.schema.json", "json-schema"),
     "skill-refiner.plan-review-v3": ("v3", "schemas/v3/plan-review.schema.json", "json-schema"),
     "skill-refiner.plan-review-v4": ("v4", "schemas/v4/plan-review.schema.json", "json-schema"),
     "skill-refiner.plan-review-v5": ("v5", "schemas/v5/plan-review.schema.json", "json-schema"),
+    "skill-refiner.plan-review-recovery-v6": ("v6", "schemas/v6/plan-review.schema.json", "json-schema"),
     "skill-refiner.repair": ("v1", "schemas/v1/repair.schema.json", "json-schema"),
     "skill-refiner.analysis": ("v1", "schemas/v1/analysis.schema.json", "json-schema"),
     "skill-refiner.analysis-review": ("v1", "schemas/v1/analysis-review.schema.json", "json-schema"),
     "skill-refiner.analysis-v2": ("v2", "schemas/v2/analysis.schema.json", "json-schema"),
+    "skill-refiner.analysis-v3": ("v3", "schemas/v3/analysis.schema.json", "json-schema"),
     "skill-refiner.analysis-review-v2": ("v2", "schemas/v2/analysis-review.schema.json", "json-schema"),
+    "skill-refiner.analysis-review-v3": ("v3", "schemas/v3/analysis-review.schema.json", "json-schema"),
     "skill-refiner.skill-stage-contracts": ("v1", "schemas/v1/skill-stage-contracts.schema.json", "json-schema"),
 }
 
@@ -70,15 +99,31 @@ def schema_ref_compatible(stored: dict, current: dict) -> bool:
     return stored["path"] in {current["path"], LEGACY_SCHEMA_PATHS.get(current["id"])}
 
 
+# Registries frozen before these explicitly additive contracts remain valid.
+_ADDITIVE_SCHEMA_IDS = frozenset({
+    "skill-refiner.plan-v7",
+    "skill-refiner.plan-v8",
+    "skill-refiner.plan-review-v8",
+    "skill-refiner.plan-review-recovery-v8",
+    "skill-refiner.plan-review-recovery-v6",
+    "skill-refiner.response-applicability-analysis-v1",
+    "skill-refiner.response-applicability-decision-v1",
+    "skill-refiner.response-contract-migration-v1",
+})
+
+
 def schema_refs_compatible(stored_refs: list[dict], current_refs: list[dict]) -> bool:
-    """Compare registries while allowing path-only migration of the old flat layout."""
-    if not isinstance(stored_refs, list) or len(stored_refs) != len(current_refs):
+    """Permit only known additive schemas; all previously frozen refs stay exact."""
+    if not isinstance(stored_refs, list):
         return False
     stored_by_id = {row.get("id"): row for row in stored_refs if isinstance(row, dict)}
-    current_by_id = {row["id"]: row for row in current_refs}
-    if len(stored_by_id) != len(stored_refs) or stored_by_id.keys() != current_by_id.keys():
+    current_by_id = {row.get("id"): row for row in current_refs if isinstance(row, dict)}
+    if len(stored_by_id) != len(stored_refs) or len(current_by_id) != len(current_refs):
         return False
-    return all(schema_ref_compatible(stored_by_id[key], current_by_id[key]) for key in current_by_id)
+    missing = current_by_id.keys() - stored_by_id.keys()
+    if stored_by_id.keys() - current_by_id.keys() or missing - _ADDITIVE_SCHEMA_IDS:
+        return False
+    return all(schema_ref_compatible(stored_by_id[key], current_by_id[key]) for key in stored_by_id)
 
 
 def _schema_for(reference: dict) -> tuple[dict, dict]:
@@ -255,7 +300,7 @@ def validate_artifact(path: Path, root: Path, artifact: dict, *, expected_contra
             or artifact.get("validation", {}).get("validator_id") != actual_reference["validator_id"]):
         raise ValueError(f"Artifact {relative} schema reference or validator id changed")
 
-    if schema_id == "skill-refiner.json-object":
+    if actual_reference["validator_id"] == "json-schema":
         try:
             value = json.loads(data.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -287,18 +332,87 @@ def content_schema_id(path: Path, media_type: str | None = None) -> str:
     parts = set(part.lower() for part in path_text.split("/"))
     in_original_skill = "original" in parts
     in_skill_tree = bool(parts.intersection({"original", "final", "candidates", "drafts"}))
-    if basename in {"test-plan.json", "acceptance-plan.json"} and not in_skill_tree:
+    in_skill_tree |= bool(re.search(r"/engines/[^/]+/skill/", path_text))
+    if basename == "response-contract-migration.json" and not in_skill_tree:
+        return "skill-refiner.response-contract-migration-v1"
+    if suffix == ".json" and not in_skill_tree and path.is_file():
+        try:
+            kind = json.loads(path.read_text(encoding="utf-8")).get("schema_version")
+        except (OSError, UnicodeError, ValueError, AttributeError):
+            kind = None
+        typed = {"skill-refiner.response-applicability-analysis/v1": "skill-refiner.response-applicability-analysis-v1",
+                 "skill-refiner.response-applicability-decision/v1": "skill-refiner.response-applicability-decision-v1"}
+        if kind in typed:
+            return typed[kind]
+    if re.search(r"(?:^|/)drafts/[0-9]+/static-findings\.json$", path_text):
+        return "skill-refiner.static-findings"
+    if basename == "evaluation-cost.json" and not in_skill_tree:
+        return "skill-refiner.evaluation-cost"
+    if basename == "process.execution.json" and not in_skill_tree:
+        return "skill-refiner.process-execution"
+    if basename.startswith("runtime-preflight") and suffix == ".json" and not in_skill_tree:
+        return "skill-refiner.runtime-preflight"
+    if basename.startswith("clarification-review-attempt-") and suffix == ".json" and not in_skill_tree:
+        return "skill-refiner.clarification-review"
+    if basename.startswith("analysis-revision-delta-") and suffix == ".json" and not in_skill_tree:
+        if path.is_file():
+            try:
+                if json.loads(path.read_text(encoding="utf-8")).get("schema_version") == "skill-refiner.analysis-revision-delta/v2":
+                    return "skill-refiner.analysis-revision-delta-v2"
+            except (OSError, UnicodeError, ValueError, AttributeError):
+                pass
+        return "skill-refiner.analysis-revision-delta"
+    if basename.startswith("technical-triage-") and suffix == ".json" and not in_skill_tree:
+        return "skill-refiner.technical-triage"
+    if basename == "technical-coverage.json" and not in_skill_tree:
+        return "skill-refiner.technical-coverage"
+    if ((basename in {"test-plan.json", "acceptance-plan.json"} and not in_skill_tree)
+            or "/plan/response.json" in path_text or "/acceptance-plan/response.json" in path_text):
+        if path.is_file():
+            try:
+                version = json.loads(path.read_text(encoding="utf-8")).get("schema_version")
+            except (OSError, UnicodeError, ValueError, AttributeError):
+                version = None
+            if version in {f"skill-refiner.plan/v{n}" for n in range(2, 9)}:
+                return "skill-refiner.plan-" + version.rsplit("/", 1)[1]
         return "skill-refiner.plan-v5"
     if (basename == "analysis.json" and not in_skill_tree) or "/analyze/response.json" in path_text:
-        return "skill-refiner.analysis-v2"
+        if path.is_file():
+            try:
+                version = json.loads(path.read_text(encoding="utf-8")).get("schema_version")
+            except (OSError, UnicodeError, ValueError, AttributeError):
+                version = None
+            if version in (None, "skill-refiner.analysis/v1"):
+                return "skill-refiner.analysis"
+            if version == "skill-refiner.analysis/v2":
+                return "skill-refiner.analysis-v2"
+            if version == "skill-refiner.analysis/v4":
+                return "skill-refiner.analysis-v4"
+        return "skill-refiner.analysis-v3"
+    if basename.startswith("analysis-review-attempt-") and suffix == ".json" and not in_skill_tree and path.is_file():
+        try:
+            version = json.loads(path.read_text(encoding="utf-8")).get("schema_version")
+            if version in ("skill-refiner.analysis-review/v3", "skill-refiner.analysis-review/v4"):
+                return "skill-refiner.analysis-review-" + version.rsplit("/", 1)[1]
+        except (OSError, UnicodeError, ValueError, AttributeError):
+            pass
     if (basename == "analysis-review.json" and not in_skill_tree) or "/analysis-review/response.json" in path_text:
+        if path.is_file():
+            try:
+                version = json.loads(path.read_text(encoding="utf-8")).get("schema_version")
+            except (OSError, UnicodeError, ValueError, AttributeError):
+                version = None
+            if version in (None, "skill-refiner.analysis-review/v1"):
+                return "skill-refiner.analysis-review"
+            if version == "skill-refiner.analysis-review/v3":
+                return "skill-refiner.analysis-review-v3"
+            if version == "skill-refiner.analysis-review/v4":
+                return "skill-refiner.analysis-review-v4"
         return "skill-refiner.analysis-review-v2"
     if basename == "changes.json" and "/iterations/round-" in path_text:
         return "skill-refiner.repair"
     if "/plan-review/response.json" in path_text:
         return "skill-refiner.plan-review-v5"
-    if "/plan/response.json" in path_text or "/acceptance-plan/response.json" in path_text:
-        return "skill-refiner.plan-v5"
     media_type = media_type or mimetypes.guess_type(Path(path).name)[0] or "application/octet-stream"
     if suffix == ".json" or media_type == "application/json" or media_type.endswith("+json"):
         return "skill-refiner.json-object"

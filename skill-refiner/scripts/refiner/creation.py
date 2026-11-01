@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import difflib
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import shutil
@@ -15,10 +16,13 @@ from .agent import Agent
 from .common import Cancelled, RefinerError, digest, manifest, read_json, snapshot, write_json
 from .pipeline import apply_changes, run as refine
 from .profiles import load_config
-from .schemas import PLAN, REQUIREMENTS, REVIEW, RISK_DIMENSIONS, SCENARIO_INTENT
+from .schemas import PLAN, REQUIREMENTS, REVIEW, RISK_DIMENSIONS, SCENARIO_INTENT, SCENARIO_DETAIL_V3
 from .standards import AUTHORING, discover_project_standards, lint
 from .stages import StageManifest, CREATE_EVENTS
 from .plan import write_test_scenarios, write_work_plan
+from .preflight import build_runtime_preflight, emit_runtime_preflight
+from .obligations import (effective_requirements, revision_requirements, standard_sources,
+                          validate_obligations, validate_obligation_review)
 
 STRING = {"type": "string", "minLength": 1}
 STRINGS = {"type": "array", "items": STRING}
@@ -168,7 +172,22 @@ ANALYSIS_V2 = {
                            "impact": {"type": "string", "minLength": 8}}}},
     },
 }
-ANALYSIS = ANALYSIS_V2
+ANALYSIS_V3 = copy.deepcopy(ANALYSIS_V2)
+ANALYSIS_V3["properties"]["schema_version"] = {"const": "skill-refiner.analysis/v3"}
+_scenario_v3 = ANALYSIS_V3["properties"]["scenarios"]["items"]
+for _field in ("requirement_ids", "acceptance_criteria_ids"):
+    _scenario_v3["properties"][_field].pop("minItems")
+_detail_v3 = copy.deepcopy(SCENARIO_DETAIL_V3)
+_excluded_detail_v3 = copy.deepcopy(_detail_v3)
+for _field in ("preconditions", "actions", "expected_observables", "forbidden_outcomes", "risk_dimensions"):
+    _excluded_detail_v3["properties"][_field].pop("minItems", None)
+_scenario_v3["properties"]["detail"] = {"anyOf": [_excluded_detail_v3, {"type": "null"}]}
+_scenario_v3["allOf"].append({
+    "if": {"properties": {"applicable": {"const": True}}, "required": ["applicable"]},
+    "then": {"properties": {"requirement_ids": {"minItems": 1}, "acceptance_criteria_ids": {"minItems": 1},
+                            "detail": _detail_v3}}})
+ANALYSIS_V4 = read_json(Path(__file__).resolve().parents[2] / 'schemas/v4/analysis.schema.json')
+ANALYSIS = ANALYSIS_V4
 ANALYSIS_REVIEW_V2 = {
     **ANALYSIS_REVIEW_V1,
     "required": ANALYSIS_REVIEW_V1["required"] + ["schema_version", "context_scope_assessment",
@@ -201,6 +220,8 @@ ANALYSIS_REVIEW_V2 = {
     },
 }
 ANALYSIS_REVIEW = ANALYSIS_REVIEW_V2
+ANALYSIS_REVIEW_V3 = read_json(Path(__file__).resolve().parents[2] / 'schemas/v3/analysis-review.schema.json')
+ANALYSIS_REVIEW_V4 = read_json(Path(__file__).resolve().parents[2] / 'schemas/v4/analysis-review.schema.json')
 DRAFT = {
     "type": "object", "additionalProperties": False,
     "required": ["implementation_notes", "files"],
@@ -212,7 +233,11 @@ DRAFT = {
 }
 DRAFT_INSTRUCTION = (
     'Create the complete first implementation of the requested Agent Skill from the approved business '
-    'analysis and original requirements. All file paths are relative to the Skill root: use SKILL.md, '
+    'analysis and original requirements. Implement the effective_contract: business R and applicable target O '
+    'obligations retain distinct real sources. Implement the declared target schema/validator and bounded '
+    'self-review interfaces without adding unrequested public output fields. Include O IDs in relevant files '
+    'requirement_ids. Planned mechanisms are designs, never evidence of passed behavior. '
+    'All file paths are relative to the Skill root: use SKILL.md, '
     'scripts/NAME.py and references/NAME.md without a surrounding Skill-name directory. '
     'Return full UTF-8 files, including SKILL.md with valid YAML '
     'name/description matching analysis.name, focused instructions, discoverable references, and working '
@@ -255,20 +280,24 @@ def normalize_draft(draft, name):
     return result, mapping
 
 
-def validate_analysis(analysis, requested_name=None, source_ids=None):
+def validate_analysis(analysis, requested_name=None, source_ids=None, *, standards=None):
     import jsonschema
     version = analysis.get("schema_version")
-    if version not in (None, "skill-refiner.analysis/v1", "skill-refiner.analysis/v2"):
+    if version not in (None, "skill-refiner.analysis/v1", "skill-refiner.analysis/v2", "skill-refiner.analysis/v3", "skill-refiner.analysis/v4"):
         raise RefinerError(f"Unsupported business analysis schema version: {version}")
-    schema = ANALYSIS_V1 if version in (None, "skill-refiner.analysis/v1") else ANALYSIS_V2
+    schema = (ANALYSIS_V1 if version in (None, "skill-refiner.analysis/v1") else
+              ANALYSIS_V2 if version == "skill-refiner.analysis/v2" else
+              ANALYSIS_V4 if version == "skill-refiner.analysis/v4" else ANALYSIS_V3)
     jsonschema.validate(analysis, schema)
     if requested_name and analysis["name"] != requested_name:
         raise RefinerError("Business analysis changed the requested Skill name")
-    ids = [r["id"] for r in analysis["requirements"]]
+    validate_obligations(analysis, standards)
+    requirements = effective_requirements(analysis)
+    ids = [r["id"] for r in requirements]
     if source_ids and any(not any(r['source'].startswith(source + ':') for source in source_ids)
                           for r in analysis['requirements']):
         raise RefinerError('Business requirements must cite an original business source ID followed by a colon; '
-                           'authoring standards belong in standards review, not in the business test contract')
+                           'target standards use the separate target_obligations inventory')
     if len(set(ids)) != len(ids) or any(not x.strip() for x in ids):
         raise RefinerError("Business requirement IDs must be nonempty and unique")
     if not {"normal", "boundary", "error"} <= {s["kind"] for s in analysis["scenarios"]}:
@@ -276,8 +305,8 @@ def validate_analysis(analysis, requested_name=None, source_ids=None):
     if not any(s["kind"] == "normal" and s["applicable"] for s in analysis["scenarios"]):
         raise RefinerError("Normal business behavior must have an executable scenario")
     criteria_by_requirement = {r["id"]: {c["id"] for c in r["acceptance_criteria"]}
-                               for r in analysis["requirements"]}
-    criterion_ids = [criterion["id"] for req in analysis["requirements"]
+                               for r in requirements}
+    criterion_ids = [criterion["id"] for req in requirements
                      for criterion in req["acceptance_criteria"]]
     if len(criterion_ids) != len(set(criterion_ids)):
         raise RefinerError("Acceptance criterion IDs must be globally unique")
@@ -302,14 +331,14 @@ def validate_analysis(analysis, requested_name=None, source_ids=None):
             raise RefinerError(f"Applicable scenario {scenario['id']} must map to requirements and acceptance criteria")
         if not scenario["applicable"] and not scenario["exclusion_reason"].strip():
             raise RefinerError(f"Excluded scenario {scenario['id']} needs a scope-based reason")
-    required_criteria = {c["id"] for r in analysis["requirements"] if r["required"]
+    required_criteria = {c["id"] for r in requirements if r["required"]
                          for c in r["acceptance_criteria"]}
     covered_criteria = {criterion_id for scenario in analysis["scenarios"] if scenario["applicable"]
                         for criterion_id in scenario["acceptance_criteria_ids"]}
     if not required_criteria <= covered_criteria:
         raise RefinerError("Scenario matrix omits required acceptance criteria: " +
                            ", ".join(sorted(required_criteria - covered_criteria)))
-    if version == "skill-refiner.analysis/v2":
+    if version in ("skill-refiner.analysis/v2", "skill-refiner.analysis/v3", "skill-refiner.analysis/v4"):
         actor_ids = [row["id"] for row in analysis["actors"]]
         if len(actor_ids) != len(set(actor_ids)):
             raise RefinerError("Analysis actor IDs must be unique")
@@ -327,10 +356,18 @@ def validate_analysis(analysis, requested_name=None, source_ids=None):
             raise RefinerError("Workflow step IDs must be unique")
         if sorted(workflow_orders) != list(range(1, len(workflow_orders) + 1)):
             raise RefinerError("Workflow order values must be unique and contiguous from 1")
+        if set(workflow_ids) & set(dependency_ids):
+            raise RefinerError("Workflow step and external dependency IDs must be distinct")
+        step_orders = {row["id"]: row["order"] for row in analysis["workflow"]}
         for step in analysis["workflow"]:
-            if (not set(step["actor_ids"]) <= set(actor_ids)
-                    or not set(step["dependency_ids"]) <= set(dependency_ids)):
+            if not set(step["actor_ids"]) <= set(actor_ids):
                 raise RefinerError(f"Workflow step {step['id']} references an unknown actor or dependency")
+            for dependency_id in step["dependency_ids"]:
+                if dependency_id in step_orders:
+                    if step_orders[dependency_id] >= step["order"]:
+                        raise RefinerError(f"Workflow step {step['id']} must depend only on earlier workflow steps: {dependency_id}")
+                elif dependency_id not in dependency_ids:
+                    raise RefinerError(f"Workflow step {step['id']} references an unknown actor or dependency: {dependency_id}")
         risk_rows = analysis["risk_assessments"]
         assessed = [row["dimension"] for row in risk_rows]
         if len(assessed) != len(set(assessed)) or set(assessed) != set(RISK_DIMENSIONS):
@@ -365,13 +402,305 @@ def validate_analysis(analysis, requested_name=None, source_ids=None):
             raise RefinerError("Assumption and blocking-decision IDs must be unique")
 
 
+class CreationCapacityError(RefinerError):
+    """Configured suite capacity cannot support a valid frozen plan."""
+
+
+def preflight_creation_case_capacity(analysis, max_cases, acceptance_cases):
+    """Validate configured minima, then defer actual case counts to the frozen plan.
+
+    Analysis scenarios are coverage intents, not executable cases. Only the
+    schema-validated plan and its requirement, criterion, and scenario links
+    can establish the number of distinct cases needed by either suite.
+    """
+    applicable_count = sum(bool(row["applicable"]) for row in analysis["scenarios"])
+    development_capacity = int(max_cases)
+    acceptance_capacity = int(acceptance_cases)
+    minimum = 2
+    if development_capacity < minimum or acceptance_capacity < minimum:
+        raise CreationCapacityError(
+            "Configured development and acceptance case capacities must each fit the "
+            f"minimum {minimum}-case plan; "
+            f"(development capacity {development_capacity}, acceptance capacity {acceptance_capacity})"
+        )
+    return {
+        "status": "deferred_to_frozen_plan",
+        "applicable_scenario_count": applicable_count,
+        "case_capacities": {
+            "development": development_capacity,
+            "acceptance": acceptance_capacity,
+        },
+        "decision_source": "frozen plan case IDs and their requirement/criterion/scenario links",
+    }
+
+
+CONTROLLER_CAPACITY_OWNER = "Refiner 控制器容量配置"
+
+
+def route_controller_capacity_questions(analysis):
+    """Remove the reserved controller-capacity question from business clarification.
+
+    Capacity is decided from frozen suite case IDs later in the pipeline. This
+    reserved owner value routes that question internally; it cannot become a
+    user-facing business question or override a frozen-plan capacity diagnosis.
+    """
+    questions = analysis.get("blocking_questions", [])
+    routed = [row for row in questions if row.get("decision_owner") == CONTROLLER_CAPACITY_OWNER]
+    if not routed:
+        return analysis, []
+    result = copy.deepcopy(analysis)
+    result["blocking_questions"] = [row for row in questions
+                                    if row.get("decision_owner") != CONTROLLER_CAPACITY_OWNER]
+    return result, routed
+
+
+class ClarificationGateError(RefinerError):
+    """Stop when a clarification cannot be independently and safely reviewed."""
+
+
+class ClarificationRevisionGateError(RefinerError):
+    """Stop when a proposed clarification correction changes frozen analysis."""
+
+
+class AnalysisRevisionGateError(RefinerError):
+    """Stop when an independent review did not justify a coverage reduction."""
+
+
+def validate_clarification_review(review, analysis, business_sources):
+    """Require complete question coverage and citations into the original inputs."""
+    from .artifact_validation import schema_ref, validate_value
+    try:
+        validate_value(review, schema_ref("skill-refiner.clarification-review"), subject="clarification review")
+    except ValueError as exc:
+        raise RefinerError(f"Clarification review schema failed: {exc}") from exc
+    question_ids = [row["id"] for row in analysis["blocking_questions"]]
+    rows = review["question_assessments"]
+    reviewed_ids = [row["question_id"] for row in rows]
+    if len(reviewed_ids) != len(set(reviewed_ids)) or set(reviewed_ids) != set(question_ids):
+        raise RefinerError("Clarification review must assess each blocking question exactly once")
+    sources = {row["id"]: row["content"] for row in business_sources}
+    required_rows = [row for row in analysis["requirements"] if row["required"]]
+    required_ids = {row["id"] for row in required_rows}
+    required_source_ids = {source_id for source_id in sources for requirement in required_rows
+                           if source_id + ":" in requirement["source"]}
+    for row in rows:
+        for citation in row["evidence"]:
+            if (not any(character.isalnum() for character in citation["quote"])
+                    or citation["source_id"] not in sources or citation["quote"] not in sources[citation["source_id"]]):
+                raise RefinerError(f"Clarification review for {row['question_id']} cites absent business source text")
+        if not row["reason"].strip() or (row["classification"] == "unsupported_extra" and not row["out_of_scope"].strip()):
+            raise RefinerError(f"Clarification review for {row['question_id']} lacks a concrete scope basis")
+        if row["classification"] == "unsupported_extra":
+            if set(row["required_requirement_ids_examined"]) != required_ids:
+                raise RefinerError(f"Clarification review for {row['question_id']} did not examine every required requirement")
+            if not required_source_ids <= {citation["source_id"] for citation in row["evidence"]}:
+                raise RefinerError(f"Clarification review for {row['question_id']} did not cite every required business source")
+
+
+def validate_clarification_revision(previous, revised, review, *, allow_v3_to_v4=False):
+    """Freeze all business elements except reviewed out-of-scope clarifications."""
+    assessments = review["question_assessments"]
+    extras = {row["question_id"] for row in assessments if row["classification"] == "unsupported_extra"}
+    retained = [question for question in previous["blocking_questions"] if question["id"] not in extras]
+    if revised.get("blocking_questions") != retained:
+        raise RefinerError("Clarification revision changed a required or uncertain question")
+    expected_scope = previous["scope"]["out_of_scope"] + [row["out_of_scope"] for row in assessments
+                                                           if row["classification"] == "unsupported_extra"]
+    if revised.get("scope", {}).get("out_of_scope") != expected_scope:
+        raise RefinerError("Clarification revision must append exactly the reviewed exclusions")
+    old, new = copy.deepcopy(previous), copy.deepcopy(revised)
+    old.pop("blocking_questions", None)
+    new.pop("blocking_questions", None)
+    old["scope"].pop("out_of_scope", None)
+    new["scope"].pop("out_of_scope", None)
+    if (allow_v3_to_v4 and old.get('schema_version') == 'skill-refiner.analysis/v3'
+            and new.get('schema_version') == 'skill-refiner.analysis/v4'):
+        # The v4 standard-obligations inventory is independently schema- and
+        # review-gated. Permit only its own IDs in existing link arrays, while
+        # comparing the original v3 business links and every other field exactly.
+        inventory = new.get('target_obligations', {})
+        obligations = inventory.get('obligations', []) if isinstance(inventory, dict) else []
+        target = [row for row in obligations if isinstance(row, dict)
+                  and row.get('subject') == 'target' and row.get('applicable') is True]
+        target_ids = {row.get('id') for row in target}
+        target_criteria = {criterion.get('id') for row in target
+                           for criterion in row.get('acceptance_criteria', []) if isinstance(criterion, dict)}
+        for kind in ('workflow', 'scenarios'):
+            for row in new.get(kind, []):
+                if isinstance(row, dict) and isinstance(row.get('requirement_ids'), list):
+                    row['requirement_ids'] = [value for value in row['requirement_ids'] if value not in target_ids]
+                if kind == 'scenarios' and isinstance(row, dict) and isinstance(row.get('acceptance_criteria_ids'), list):
+                    row['acceptance_criteria_ids'] = [value for value in row['acceptance_criteria_ids'] if value not in target_criteria]
+        old.pop('schema_version')
+        new.pop('schema_version')
+        new.pop('target_obligations', None)
+    if old != new:
+        raise RefinerError("Clarification revision changed frozen business analysis or scenarios")
+
+
+def _latest_resume_clarification(work, inputs, history, sealed, stages, *, verified_boundary=0):
+    """Select a newer authenticated pair or fail closed on incomplete evidence."""
+    from .analysis_recovery import _call
+    from .technical_recovery import clarification_history
+    last_full = max((int(row['review_call'].split('-', 1)[0]) for row in history), default=0)
+    sealed_review = int(sealed['pair']['review_call'].split('-', 1)[0]) if sealed else 0
+    boundary = max(last_full, verified_boundary, max((int(call.split('-', 1)[0]) for call in sealed['calls']), default=0)
+                   if sealed else 0)
+    calls = work / 'agent-calls'
+    later = sorted((p for p in calls.iterdir() if p.is_dir() and p.name.split('-', 1)[0].isdigit()
+                    and int(p.name.split('-', 1)[0]) > boundary
+                    and p.name.endswith(('-analyze', '-analysis-review'))),
+                   key=lambda p: int(p.name.split('-', 1)[0])) if calls.is_dir() else []
+    if not later:
+        return sealed if sealed_review > last_full else None
+    stage = next((row for row in stages.get('stages', []) if row.get('id') == 'analysis'), None)
+    if not stage or stage.get('status') not in {'blocked', 'error', 'pending'}:
+        raise RefinerError('Latest active clarification lacks incomplete stage evidence')
+    pairs, retained = clarification_history(work, inputs, after_call=boundary, source_manifest=stages)
+    if not retained or not retained[0].endswith('-analyze'):
+        raise RefinerError('Latest active clarification lacks its initial analysis evidence')
+    recorded = {row['path']: row['sha256'] for row in stage.get('artifacts', [])}
+    request, _ = _call(work, calls / retained[0], 'analyze', recorded)
+    payload = request.get('input', {})
+    if sealed and sealed_review > last_full:
+        if (payload.get('previous_analysis') != sealed['pair']['analysis']
+                or payload.get('clarification_review') != sealed['pair']['review']):
+            raise RefinerError('Latest clarification does not follow the authenticated prior pair')
+        validate_clarification_revision(sealed['pair']['analysis'], pairs[0]['analysis'],
+                                        sealed['pair']['review'], allow_v3_to_v4=True)
+    elif not history or payload.get('previous_analysis') != history[-1]['analysis']:
+        raise RefinerError('Latest clarification does not follow the latest full review')
+    if payload.get('previous_analysis_reviews') != [row['review'] for row in history]:
+        raise RefinerError('Latest clarification lost its full review history')
+    extra_rounds = int(bool(sealed and sealed_review > last_full and any(
+        item.get('classification') == 'unsupported_extra' for item in sealed['pair']['review']['question_assessments'])))
+    extra_rounds += sum(any(item.get('classification') == 'unsupported_extra'
+                            for item in pair['review']['question_assessments']) for pair in pairs)
+    if extra_rounds > 1:
+        raise RefinerError('Authenticated clarification history exhausted its correction budget')
+    return {'pair': pairs[-1], 'calls': retained}
+
+
+def _changed_paths(before, after, path=''):
+    if isinstance(before, dict) and isinstance(after, dict):
+        result = []
+        for key in sorted(before.keys() | after.keys()):
+            child = path + '/' + key.replace('~', '~0').replace('/', '~1')
+            if key not in before or key not in after:
+                result.append(child)
+            else:
+                result.extend(_changed_paths(before[key], after[key], child))
+        return result
+    if isinstance(before, list) and isinstance(after, list):
+        result = []
+        for index in range(max(len(before), len(after))):
+            child = path + '/' + str(index)
+            if index >= len(before) or index >= len(after):
+                result.append(child)
+            else:
+                result.extend(_changed_paths(before[index], after[index], child))
+        return result
+    return [path or '/'] if before != after else []
+
+
+def analysis_revision_delta(previous, revised):
+    """Expose all changed IDs and identify coverage reductions for independent review."""
+    old_requirements = revision_requirements(previous)
+    new_requirements = revision_requirements(revised)
+    old_scenarios = {row["id"]: row for row in previous["scenarios"]}
+    new_scenarios = {row["id"]: row for row in revised["scenarios"]}
+    changes = []
+    for kind, old, new in (("requirement", old_requirements, new_requirements),
+                           ("scenario", old_scenarios, new_scenarios)):
+        for key in sorted(old):
+            if key in new and old[key] == new[key]:
+                continue
+            before, after = copy.deepcopy(old[key]), copy.deepcopy(new.get(key))
+            changes.append({"kind": kind, "id": key, "before": before, "after": after,
+                            "before_sha256": digest(before), "after_sha256": digest(after) if after is not None else None,
+                            "changed_paths": _changed_paths(before, after)})
+    return {"schema_version": "skill-refiner.analysis-revision-delta/v2", "changes": changes,
+            "previous_sha256": digest(previous), "revised_sha256": digest(revised),
+            "requirements_added": sorted(new_requirements.keys() - old_requirements.keys()),
+            "requirements_removed": sorted(old_requirements.keys() - new_requirements.keys()),
+            "requirements_changed": sorted(key for key in old_requirements.keys() & new_requirements.keys()
+                                           if old_requirements[key] != new_requirements[key]),
+            "required_downgraded": sorted(key for key, row in old_requirements.items() if row["required"]
+                                         and (key not in new_requirements or not new_requirements[key]["required"])),
+            "scenarios_added": sorted(new_scenarios.keys() - old_scenarios.keys()),
+            "scenarios_removed": sorted(old_scenarios.keys() - new_scenarios.keys()),
+            "scenarios_changed": sorted(key for key in old_scenarios.keys() & new_scenarios.keys()
+                                        if old_scenarios[key] != new_scenarios[key]),
+            "applicable_excluded": sorted(key for key, row in old_scenarios.items() if row["applicable"]
+                                          and (key not in new_scenarios or not new_scenarios[key]["applicable"]))}
+
+
+def validate_analysis_revision_review(review, delta, sources=None, revised_analysis=None):
+    """Require the independent reviewer to address each lost requirement or scenario."""
+    if delta.get('schema_version') == 'skill-refiner.analysis-revision-delta/v2':
+        changes = delta['changes']
+        assessments = review.get('revision_assessments')
+        if not isinstance(assessments, list):
+            raise AnalysisRevisionGateError('Independent review must assess each changed requirement and scenario')
+        expected = {(row['kind'], row['id']): row for row in changes}
+        actual = {(row.get('kind'), row.get('id')): row for row in assessments}
+        if len(expected) != len(changes) or len(actual) != len(assessments) or actual.keys() != expected.keys():
+            raise AnalysisRevisionGateError('Independent review must assess every changed ID exactly once')
+        source_map = {row['id']: row['content'] for row in (sources or [])}
+        if not isinstance(revised_analysis, dict):
+            raise AnalysisRevisionGateError('Revision review requires the complete revised analysis')
+        requirements = effective_requirements(revised_analysis)
+        valid_refs = ({('requirement', row['id']) for row in requirements if row['required']}
+                      | {('acceptance_criterion', criterion['id'])
+                         for row in requirements if row['required']
+                         for criterion in row['acceptance_criteria']}
+                      | {('scenario', row['id']) for row in revised_analysis['scenarios'] if row['applicable']})
+        for key, change in expected.items():
+            row = actual[key]
+            if (digest(change['before']) != change['before_sha256']
+                    or (digest(change['after']) if change['after'] is not None else None) != change['after_sha256']
+                    or _changed_paths(change['before'], change['after']) != change['changed_paths']):
+                raise AnalysisRevisionGateError(f'Revision delta does not match its before/after content: {key}')
+            if (row.get('before_sha256') != change['before_sha256'] or row.get('after_sha256') != change['after_sha256']):
+                raise AnalysisRevisionGateError(f'Independent assessment is not bound to the actual change: {key}')
+            reason = row.get('reason', '')
+            if not isinstance(reason, str) or len(reason.strip()) < 8 or not any(ch.isalnum() for ch in reason):
+                raise AnalysisRevisionGateError(f'Independent assessment lacks a concrete reason: {key}')
+            evidence = row.get('source_evidence', [])
+            if not evidence:
+                raise AnalysisRevisionGateError(f'Independent assessment lacks source evidence: {key}')
+            for item in evidence:
+                quote, source = item.get('quote', ''), source_map.get(item.get('source_id'))
+                if (not isinstance(quote, str) or not quote.strip() or not any(ch.isalnum() for ch in quote)
+                        or not isinstance(source, str) or quote not in source):
+                    raise AnalysisRevisionGateError(f'Independent assessment cites invalid source evidence: {key}')
+            refs = row.get('replacement_refs', [])
+            keys = [(item.get('kind'), item.get('id')) for item in refs]
+            if len(keys) != len(set(keys)) or not set(keys) <= valid_refs:
+                raise AnalysisRevisionGateError(f'Independent assessment has invalid replacement coverage: {key}')
+            if row.get('outcome') in {'equivalent', 'justified_change'} and not refs:
+                raise AnalysisRevisionGateError(f'Independent assessment lacks replacement coverage: {key}')
+            if review.get('approved') and row.get('outcome') not in {'equivalent', 'justified_change', 'excluded_by_source'}:
+                raise AnalysisRevisionGateError(f'Approved revision has unresolved coverage: {key}')
+        return
+    reductions = set(delta["required_downgraded"]) | set(delta["scenarios_removed"]) | set(delta["applicable_excluded"])
+    if review.get("approved") and reductions:
+        basis = review.get("context_scope_assessment", {}).get("basis", "")
+        missing = [key for key in sorted(reductions) if not re.search(r'(?<![A-Za-z0-9._-])' + re.escape(key) +
+                                                                     r'(?![A-Za-z0-9._-])', basis)]
+        if missing:
+            raise AnalysisRevisionGateError("Independent review did not justify each coverage reduction: " + ", ".join(missing))
+
+
 def validate_analysis_review(review, analysis):
     import jsonschema
     version = analysis.get("schema_version")
-    review_schema = ANALYSIS_REVIEW_V2 if version == "skill-refiner.analysis/v2" else ANALYSIS_REVIEW_V1
+    review_schema = (ANALYSIS_REVIEW_V4 if version == 'skill-refiner.analysis/v4' else
+                     ANALYSIS_REVIEW_V3 if review.get('schema_version') == 'skill-refiner.analysis-review/v3' else
+                     ANALYSIS_REVIEW_V2 if version in ("skill-refiner.analysis/v2", "skill-refiner.analysis/v3") else ANALYSIS_REVIEW_V1)
     jsonschema.validate(review, review_schema)
     rows = review["requirement_assessments"]
-    expected = {r["id"] for r in analysis["requirements"]}
+    expected = {r["id"] for r in effective_requirements(analysis)}
     if len(rows) != len(expected) or {r["requirement_id"] for r in rows} != expected:
         raise RefinerError("Analysis review must assess every requirement exactly once")
     scenarios = review["scenario_assessments"]
@@ -381,12 +710,16 @@ def validate_analysis_review(review, analysis):
         raise RefinerError("Analysis review must assess every scenario exactly once")
     req_ok = all(all(row[key] for key in ("grounded", "acceptance_criteria_atomic", "criteria_observable"))
                  for row in rows)
+    applicability = {row["id"]: row["applicable"] for row in analysis["scenarios"]}
     scenario_ok = all(all(row[key] for key in
-                          ("detail_executable", "risk_coverage_complete", "traceability_complete"))
+                          (("risk_coverage_complete",) if version in ("skill-refiner.analysis/v3", "skill-refiner.analysis/v4")
+                           and not applicability[row["scenario_id"]] else
+                           ("detail_executable", "risk_coverage_complete", "traceability_complete")))
                       for row in scenarios)
     if review["approved"] and not (req_ok and scenario_ok):
         raise RefinerError("Analysis approval contradicts requirement or scenario completeness assessments")
-    if version == "skill-refiner.analysis/v2":
+    validate_obligation_review(review, analysis)
+    if version in ("skill-refiner.analysis/v2", "skill-refiner.analysis/v3", "skill-refiner.analysis/v4"):
         context = review["context_scope_assessment"]
         if review["approved"] and not all(context[key] for key in (
                 "intent_grounded", "actors_complete", "scope_clear", "constraints_complete")):
@@ -414,7 +747,7 @@ def validate_analysis_review(review, analysis):
 
 def analysis_markdown(analysis):
     lines = ["# Business analysis", "", analysis["goal"]]
-    if analysis.get("schema_version") == "skill-refiner.analysis/v2":
+    if analysis.get("schema_version") in ("skill-refiner.analysis/v2", "skill-refiner.analysis/v3", "skill-refiner.analysis/v4"):
         context, scope = analysis["context"], analysis["scope"]
         actor_map = {row["id"]: row for row in analysis["actors"]}
         lines += ["", "## User and operating context", "",
@@ -431,6 +764,12 @@ def analysis_markdown(analysis):
         lines.append(f"- {req['id']}: {req['behavior']} (source: {req['source']}; required={req['required']})")
         lines.extend(f"  - {criterion['id']}: {criterion['statement']} Evidence: {criterion['evidence']}"
                      for criterion in req["acceptance_criteria"])
+    if analysis.get("schema_version") == "skill-refiner.analysis/v4":
+        lines += ["", "## 标准义务及覆盖缺口", ""]
+        for row in analysis["target_obligations"]["obligations"]:
+            lines.append("- " + json.dumps(row, ensure_ascii=False))
+        for gap in analysis["target_obligations"]["coverage_gaps"]:
+            lines.append("- 覆盖缺口: " + json.dumps(gap, ensure_ascii=False))
     lines += ["", "## Workflow", ""]
     for step in analysis["workflow"]:
         lines += [f"- {step.get('order', '')}: {step['id']}: {step['action']}",
@@ -443,6 +782,12 @@ def analysis_markdown(analysis):
     lines += ["", "## Detailed scenario matrix", ""]
     for scenario in analysis["scenarios"]:
         detail = scenario["detail"]
+        if detail is None:
+            lines += [f"- {scenario['id']} ({scenario['kind']}; applicable=False): {scenario['situation']}",
+                      f"  Requirements: {', '.join(scenario['requirement_ids'])}; criteria: "
+                      f"{', '.join(scenario['acceptance_criteria_ids'])}",
+                      f"  Basis: {scenario['basis']}", f"  Excluded because: {scenario['exclusion_reason']}"]
+            continue
         lines += [f"- {scenario['id']} ({scenario['kind']}; applicable={scenario['applicable']}): {scenario['situation']}",
                   f"  Requirements: {', '.join(scenario['requirement_ids'])}; criteria: "
                   f"{', '.join(scenario['acceptance_criteria_ids'])}",
@@ -462,12 +807,191 @@ def analysis_markdown(analysis):
                 lines.append("- " + item)
             else:
                 lines.append("- " + json.dumps(item, ensure_ascii=False))
-    if analysis.get("schema_version") == "skill-refiner.analysis/v2":
+    if analysis.get("schema_version") in ("skill-refiner.analysis/v2", "skill-refiner.analysis/v3", "skill-refiner.analysis/v4"):
         lines += ["", "## Risk assessment", ""]
         lines.extend(f"- {row['dimension']}: {'applicable' if row['applicable'] else 'not applicable'}; "
                      f"basis: {row['basis']}; scenarios: {', '.join(row['scenario_ids']) or 'none'}"
                      for row in analysis["risk_assessments"])
     return "\n".join(lines) + "\n"
+
+
+CHILD_BUDGET_TERMINAL = {"passed", "unchanged", "planned", "error", "cancelled", "planning_error",
+                         "plan_not_passed", "execution_error", "not_converged", "no_progress",
+                         "failed_acceptance", "verification_failed", "coverage_gap"}
+
+
+def _budget_number(value, label, *, integer=False):
+    if (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+            or value < 0 or (integer and type(value) is not int)):
+        raise RefinerError(f"Unreconciled child budget: invalid {label}")
+    return value
+
+
+def _read_child_budget(work, *, require_settled=True):
+    """Read consumption, never infer process termination from a last heartbeat."""
+    from .pipeline import _evaluation_accounting
+    root = Path(work).resolve()
+    child = root / "refinement"
+    empty = {"elapsed_seconds": 0.0, "agent_calls": 0, "target_evaluations": 0,
+             "settled": True, "unresolved": []}
+    if not child.resolve().is_relative_to(root):
+        raise RefinerError("Child refinement checkpoint is outside its creation workspace")
+    if not (child / "state.json").is_file():
+        if child.is_dir() and any(child.iterdir()):
+            raise RefinerError("Child evidence exists without a budget state; consumption is unknown")
+        return empty
+    try:
+        saved = read_json(child / "state.json")
+        if not isinstance(saved, dict):
+            raise ValueError("child state is not an object")
+        elapsed = _budget_number(saved.get("elapsed_seconds", 0), "child elapsed_seconds")
+        saved_calls = _budget_number(saved.get("agent_calls", 0), "child agent_calls", integer=True)
+        controller = Agent(child)
+        calls = max(saved_calls, controller.calls)
+        unresolved = []
+        if saved_calls > controller.calls:
+            unresolved.append("child call counter exceeds its retained call records")
+        try:
+            controller._assert_no_unsettled_calls()
+        except RefinerError as exc:
+            unresolved.append(str(exc))
+        calls_dir = child / "agent-calls"
+        latest_finished_at = 0.0
+
+        def finished_timestamp(value, label):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    raise ValueError("missing timezone")
+                return parsed.timestamp()
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise RefinerError(f"Unreconciled terminal timing: {label}") from exc
+
+        if calls_dir.is_dir():
+            for directory in calls_dir.iterdir():
+                if not directory.is_dir() or not directory.name.split("-", 1)[0].isdigit():
+                    continue
+                execution_path = directory / "execution.json"
+                manifest_path = directory / "request-manifest.json"
+                if not execution_path.is_file():
+                    manifest_record = read_json(manifest_path) if manifest_path.is_file() else {}
+                    if manifest_record.get("status") != "rejected_context_budget":
+                        unresolved.append(f"missing terminal call timing: {directory.name}")
+                    continue
+                execution_record = read_json(execution_path)
+                if (execution_record.get("status") not in {"completed", "execution_error", "cancelled", "invalid_response"}
+                        or not execution_record.get("finished_at")):
+                    unresolved.append(f"no terminal call timing: {directory.name}")
+                else:
+                    latest_finished_at = max(latest_finished_at, finished_timestamp(
+                        execution_record["finished_at"], directory.name))
+                seconds = _budget_number(execution_record.get("seconds"), f"{directory.name} seconds")
+                if seconds > elapsed:
+                    unresolved.append(f"child elapsed counter omits a completed call duration: {directory.name}")
+                process_path = directory / "process.execution.json"
+                if process_path.is_file():
+                    process = read_json(process_path)
+                    if (process.get("status") in {"starting", "running", "termination_unconfirmed"}
+                            or not process.get("finished_at")):
+                        unresolved.append(f"no verified process end timing: {directory.name}")
+                    else:
+                        latest_finished_at = max(latest_finished_at, finished_timestamp(
+                            process["finished_at"], directory.name + " process"))
+        accounting = _evaluation_accounting(child, saved)
+        unresolved.extend("unsettled evaluation reservation: " + path for path in accounting["unresolved_attempts"])
+        for paths in accounting["ledger_paths"].values():
+            for relative in paths:
+                cost_record = read_json(child / relative)
+                if cost_record["status"] != "running":
+                    latest_finished_at = max(latest_finished_at, finished_timestamp(cost_record["finished_at"], relative))
+        if latest_finished_at > (child / "state.json").stat().st_mtime + 0.001:
+            unresolved.append("child elapsed state predates the last completed call/evaluation; actual time requires reconciliation")
+        stage_path = child / "stages.json"
+        stage = read_json(stage_path) if stage_path.is_file() else {}
+        if (saved.get("status") not in CHILD_BUDGET_TERMINAL or stage.get("status") != saved.get("status")
+                or stage.get("active_stage") is not None):
+            unresolved.append("child orchestrator has no closed terminal state/stage timing checkpoint")
+        result = {"elapsed_seconds": elapsed, "agent_calls": calls,
+                  "target_evaluations": accounting["total_cost"],
+                  "settled": not unresolved, "unresolved": unresolved}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise RefinerError(f"Child budget evidence cannot be reconciled: {child}: {exc}") from exc
+    if require_settled and unresolved:
+        raise RefinerError("Child execution requires verified termination and actual elapsed-time reconciliation; "
+                           "a last heartbeat is not its total consumed time: " + "; ".join(unresolved))
+    return result
+
+
+def _record_child_budget_entry(work, state, *, parent_elapsed, parent_calls, child_usage):
+    """Freeze the overlap boundary before entering the child workflow."""
+    if not child_usage["settled"]:
+        raise RefinerError("Cannot enter a child workflow with unresolved execution evidence")
+    state["child_budget"] = {
+        "schema_version": "skill-refiner.child-budget/v1",
+        "workspace": str(Path(work).resolve() / "refinement"),
+        "parent_elapsed_at_entry": _budget_number(parent_elapsed, "parent entry elapsed"),
+        "child_elapsed_at_entry": child_usage["elapsed_seconds"],
+        "parent_agent_calls_at_entry": _budget_number(parent_calls, "parent entry calls", integer=True),
+        "child_agent_calls_at_entry": child_usage["agent_calls"],
+        "child_evaluations_at_entry": child_usage["target_evaluations"],
+        "observed_child_elapsed_seconds": child_usage["elapsed_seconds"],
+        "observed_child_agent_calls": child_usage["agent_calls"],
+        "observed_child_target_evaluations": child_usage["target_evaluations"],
+        "reconciliation_required": False,
+    }
+    state.update(elapsed_seconds=parent_elapsed, creation_agent_calls=parent_calls,
+                 agent_calls=parent_calls + child_usage["agent_calls"],
+                 target_evaluations=child_usage["target_evaluations"])
+    write_json(Path(work) / "state.json", state)
+
+
+def _apply_child_budget(work, state, usage, *, parent_elapsed, parent_calls):
+    anchor = state.get("child_budget")
+    if not anchor:
+        if any(usage[key] for key in ("elapsed_seconds", "agent_calls", "target_evaluations")):
+            raise RefinerError("Existing child consumption has no parent/child overlap checkpoint; explicit reconciliation is required")
+        return state
+    if (not isinstance(anchor, dict) or anchor.get("schema_version") != "skill-refiner.child-budget/v1"
+            or anchor.get("workspace") != str(Path(work).resolve() / "refinement")):
+        raise RefinerError("Parent/child budget checkpoint changed")
+    for key in ("parent_elapsed_at_entry", "child_elapsed_at_entry", "observed_child_elapsed_seconds"):
+        _budget_number(anchor.get(key), key)
+    for key in ("parent_agent_calls_at_entry", "child_agent_calls_at_entry", "child_evaluations_at_entry",
+                "observed_child_agent_calls", "observed_child_target_evaluations"):
+        _budget_number(anchor.get(key), key, integer=True)
+    if (parent_elapsed < anchor["parent_elapsed_at_entry"] or parent_calls < anchor["parent_agent_calls_at_entry"]
+            or usage["elapsed_seconds"] < max(anchor["child_elapsed_at_entry"], anchor["observed_child_elapsed_seconds"])
+            or usage["agent_calls"] < max(anchor["child_agent_calls_at_entry"], anchor["observed_child_agent_calls"])
+            or usage["target_evaluations"] < max(anchor["child_evaluations_at_entry"], anchor["observed_child_target_evaluations"])):
+        raise RefinerError("Child budget counters declined below their retained checkpoint")
+    elapsed = max(parent_elapsed, state.get("elapsed_seconds", 0))
+    if usage["settled"]:
+        elapsed = max(elapsed, anchor["parent_elapsed_at_entry"]
+                      + usage["elapsed_seconds"] - anchor["child_elapsed_at_entry"])
+    anchor.update(observed_child_elapsed_seconds=usage["elapsed_seconds"],
+                  observed_child_agent_calls=usage["agent_calls"],
+                  observed_child_target_evaluations=usage["target_evaluations"],
+                  reconciliation_required=not usage["settled"])
+    if usage["unresolved"]:
+        anchor["unresolved"] = usage["unresolved"]
+    else:
+        anchor.pop("unresolved", None)
+    state.update(elapsed_seconds=round(elapsed, 3), creation_agent_calls=parent_calls,
+                 agent_calls=max(state.get("agent_calls", 0), parent_calls + usage["agent_calls"]),
+                 target_evaluations=max(state.get("target_evaluations", 0), usage["target_evaluations"]))
+    return state
+
+
+def _reconcile_child_budget(work, previous_state):
+    state = copy.deepcopy(previous_state)
+    usage = _read_child_budget(work)
+    elapsed = _budget_number(state.get("elapsed_seconds", 0), "parent elapsed_seconds")
+    parent_calls = _budget_number(state.get("creation_agent_calls", state.get("agent_calls", 0)),
+                                  "parent creation_agent_calls", integer=True)
+    if (state.get("agent_calls", 0) > parent_calls + usage["agent_calls"]
+            or state.get("target_evaluations", 0) > usage["target_evaluations"]):
+        raise RefinerError("Parent usage exceeds retained child evidence; explicit budget reconciliation is required")
+    return _apply_child_budget(work, state, usage, parent_elapsed=elapsed, parent_calls=parent_calls), usage
 
 
 def run(args):
@@ -476,6 +1000,14 @@ def run(args):
     resume_was_verified = False
     if resume and resume_run:
         raise RefinerError("Use either --resume-from or --resume-run, not both")
+    if resume and (resume / "analysis.json").is_file():
+        legacy_version = read_json(resume / "analysis.json").get("schema_version")
+        if legacy_version in (None, "skill-refiner.analysis/v1", "skill-refiner.analysis/v2", "skill-refiner.analysis/v3"):
+            raise RefinerError(
+                "Cannot start a new v4 execution from legacy analysis/draft checkpoints: their target standard "
+                "obligations were not independently traced. The old evidence is preserved. There is currently "
+                "no verified incremental standard-obligation migration entry for these completed stages; "
+                "this command cannot claim to resume or reuse them.")
     if not (args.description or args.spec or resume or resume_run):
         raise RefinerError("create needs a business description or --spec")
     if args.name and not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", args.name):
@@ -535,6 +1067,10 @@ def run(args):
             raise RefinerError("Destination must be new and outside the creation workspace")
         work.mkdir(parents=True)
     started = time.monotonic()
+    recovered_child_usage = {"elapsed_seconds": 0.0, "agent_calls": 0, "target_evaluations": 0,
+                             "settled": True, "unresolved": []}
+    if resume_run:
+        previous_state, recovered_child_usage = _reconcile_child_budget(work, previous_state)
     elapsed_before = float(previous_state.get("elapsed_seconds", 0.0)) if resume_run else 0.0
     deadline = started + max(0.0, args.max_seconds - elapsed_before)
     if resume_run:
@@ -546,12 +1082,35 @@ def run(args):
             state.pop(key, None)
     else:
         state = {"status": "analyzing", "mode": "create", "workspace": str(work), "questions": []}
-    agent = Agent(work, args.agent_command, args.timeout, config=config)
-    agent.max_calls, agent.deadline = args.max_agent_calls, deadline
+    inherited_calls = 0
+    if resume_run and (work / "input-migration.json").exists() and not previous_contract.get("input_migration_sha256"):
+        raise RefinerError("Input migration provenance is missing from the creation contract")
+    if resume_run and previous_contract.get("input_migration_sha256"):
+        from .checkpoint_migration import verify_migration
+        inherited_calls = verify_migration(work, previous_contract, previous_state)
+    if resume_run and (work / "analysis-recovery.json").exists() and not previous_contract.get("analysis_recovery_sha256"):
+        raise RefinerError("Analysis recovery provenance is missing from the creation contract")
+    if inherited_calls:
+        agent = Agent(work, args.agent_command, args.timeout, config=config, inherited_calls=inherited_calls)
+    else:
+        agent = Agent(work, args.agent_command, args.timeout, config=config)
+    if resume_run and previous_state.get("creation_agent_calls", 0) > agent.calls:
+        raise RefinerError("Parent controller calls exceed retained call evidence")
+    if resume_run:
+        # Completed analysis/draft may skip every parent ask(), so the guard must
+        # run at the recovery entry before a nested evaluator can be reached.
+        agent._assert_no_unsettled_calls()
+    agent.max_calls, agent.deadline = args.max_agent_calls - recovered_child_usage["agent_calls"], deadline
     if not resume_run:
         inputs = {"business_description": args.description or "", "requested_name": args.name,
                   "requirements": [{"source": str(Path(p).resolve()), "content": Path(p).read_text(encoding="utf-8")} for p in args.spec],
                   "standards": [AUTHORING] + [{"source": str(Path(p).resolve()), "content": Path(p).read_text(encoding="utf-8")} for p in standard_paths]}
+        if resume:
+            historical_inputs = read_json(resume / "inputs.json")
+            if "_response_contract_v7" in historical_inputs:
+                inputs["_response_contract_v7"] = historical_inputs["_response_contract_v7"]
+        else:
+            inputs["_response_contract_v7"] = True
     engine_config = read_json(args.engine_config) if args.engine_config else None
     execution = {"backend_config": config, "agent_command": args.agent_command, "engine": args.engine,
                  "engine_config": engine_config, "skill_up": args.skill_up, "timeout": args.timeout,
@@ -563,6 +1122,9 @@ def run(args):
               "max_evaluations": args.max_evaluations, "max_rounds": args.max_rounds,
               "planning_attempts": args.planning_attempts, "max_cases": args.max_cases,
               "acceptance_cases": args.acceptance_cases}
+    if (resume_run and previous_contract.get("input_migration_sha256")
+            and (options != previous_contract.get("options") or limits != previous_contract.get("limits"))):
+        raise RefinerError("Migrated checkpoint execution options and limits are frozen; a new explicitly reviewed migration is required")
     state["limits"] = limits
     state["agent_parallelism"] = getattr(args, "agent_parallelism", 2)
     state.setdefault("evaluation_history", [])
@@ -589,7 +1151,7 @@ def run(args):
             raise RefinerError("Resume budgets cannot be lower than the original creation")
         if resume_was_verified:
             from .gate import verify_run
-            verify_run(work)
+            verify_run(work, deadline=started + max(0, args.max_seconds - elapsed_before))
             return previous_state
         previous_contract["options"], previous_contract["limits"] = options, limits
         write_json(work / "creation-resume-contract.json", previous_contract)
@@ -613,7 +1175,7 @@ def run(args):
         resumed_draft = Path(previous_state['draft_root'])
         if manifest(resumed_draft) != read_json(resume/'draft-manifest.json'):
             raise RefinerError('Resume first-draft hash mismatch')
-        validate_analysis(resumed_analysis, inputs['requested_name'])
+        validate_analysis(resumed_analysis, inputs['requested_name'], standards=inputs.get('standards'))
         if resumed_analysis['blocking_questions'] or any(f['severity']=='error' for f in lint(resumed_draft,resumed_analysis['name'])):
             raise RefinerError('Resume requires approved analysis and a statically valid first draft')
         state['creation_provenance'] = {'workspace':str(resume),'business_lock':previous_lock['sha256'],
@@ -635,7 +1197,7 @@ def run(args):
             resumed_analysis = read_json(work / "analysis.json")
             saved_business_lock = read_json(work / "business.lock.json")
             saved_review = read_json(work / "analysis-review.json")
-            validate_analysis(resumed_analysis, inputs["requested_name"])
+            validate_analysis(resumed_analysis, inputs["requested_name"], standards=inputs.get('standards'))
             validate_analysis_review(saved_review, resumed_analysis)
             resume_analysis_complete = (
                 not resumed_analysis["blocking_questions"] and saved_review["approved"] is True
@@ -659,6 +1221,89 @@ def run(args):
                     and not any(f["severity"] == "error" for f in lint(candidate_draft, resumed_analysis["name"]))):
                 resumed_draft = candidate_draft
                 break
+    rejected_analysis = []
+    verified_history = []
+    pending_analyses = []
+    unvalidated_analyses = []
+    if resume_run:
+        from .analysis_recovery import rejected_history, verify_recovery
+        if previous_contract.get("analysis_recovery_sha256"):
+            verified_history = verify_recovery(work, previous_contract, inputs,
+                                                pending_analysis=pending_analyses,
+                                                invalid_analysis=unvalidated_analyses,
+                                                source_manifest=read_json(work / "stages.json"))
+            if not resume_analysis_complete:
+                rejected_analysis = verified_history
+        elif not resume_analysis_complete and (work / "stages.json").is_file():
+            rejected_analysis = rejected_history(work, inputs, source_manifest=read_json(work / "stages.json"),
+                                                 pending_analysis=pending_analyses,
+                                                 invalid_analysis=unvalidated_analyses)
+    pending_analysis = pending_analyses[-1] if pending_analyses else None
+    pending_analysis_attempt = None
+    if pending_analysis is not None:
+        matches = []
+        for path in work.glob("analysis-attempt-*.json"):
+            try:
+                if read_json(path) == pending_analysis["analysis"]:
+                    suffix = path.stem.rsplit("-", 1)[1]
+                    if suffix.isdigit():
+                        matches.append(int(suffix))
+            except (OSError, ValueError, TypeError):
+                continue
+        if not matches:
+            raise RefinerError("Validated pending analysis has no retained attempt artifact")
+        pending_analysis_attempt = max(matches)
+    pending_technical = None
+    technical_coverage = None
+    if resume_run:
+        from .artifact_validation import schema_ref, validate_value
+        from .technical_recovery import verify_technical_recovery
+        technical_record = work / 'technical-recovery.json'
+        if technical_record.is_file() != bool(previous_contract.get('technical_recovery_sha256')):
+            raise RefinerError('Technical recovery contract and evidence disagree')
+        if previous_contract.get('technical_recovery_sha256'):
+            pending_technical = verify_technical_recovery(work, previous_contract, inputs)
+            if any(row['analysis_call'] == pending_technical['analysis_call'] for row in rejected_analysis):
+                # This candidate already received a failed full review: revise it with that feedback.
+                pending_technical = None
+        gap_file = work / 'technical-coverage.json'
+        if gap_file.is_file() != bool(state.get('technical_coverage_sha256')):
+            raise RefinerError('Technical coverage state and evidence disagree')
+        if gap_file.is_file():
+            technical_coverage = read_json(gap_file)
+            validate_value(technical_coverage, schema_ref('skill-refiner.technical-coverage'), subject='technical coverage')
+            if digest(technical_coverage) != state['technical_coverage_sha256']:
+                raise RefinerError('Technical coverage evidence changed')
+    latest_clarification_state = None
+    latest_required_questions = {}
+    if resume_run:
+        from .clarification_recovery import verify_clarification_recovery
+        history = verified_history or rejected_analysis
+        sealed_clarification = verify_clarification_recovery(work, previous_contract, inputs, history)
+        technical_boundary = max((int(call.split('-', 1)[0]) for call in read_json(technical_record)['calls']), default=0) \
+            if previous_contract.get('technical_recovery_sha256') else 0
+        if previous_contract.get('analysis_recovery_sha256'):
+            sealed_files = read_json(work / 'analysis-recovery.json')['files']
+            sealed_calls = [path.split('/')[1].split('-', 1)[0] for path in sealed_files
+                            if path.startswith('agent-calls/') and len(path.split('/')) > 2]
+            technical_boundary = max(technical_boundary, *(int(n) for n in sealed_calls if n.isdigit()), 0)
+        latest_clarification_state = _latest_resume_clarification(
+            work, inputs, history, sealed_clarification, read_json(work / 'stages.json'),
+            verified_boundary=technical_boundary)
+        if latest_clarification_state and not resume_analysis_complete:
+            pair = latest_clarification_state["pair"]
+            last_reviewed_analysis = max((int(row["review_call"].split("-", 1)[0])
+                                          for row in rejected_analysis), default=0)
+            if int(pair["analysis_call"].split("-", 1)[0]) > last_reviewed_analysis:
+                # Reuse a fully verified pair without unsupported questions;
+                # otherwise the completed pair is the correction's input.
+                pending_technical = (pair if not any(
+                    row['classification'] == 'unsupported_extra'
+                    for row in pair['review']['question_assessments']) else None)
+                required = {q["question_id"] for q in pair["review"]["question_assessments"]
+                            if q["classification"] != "unsupported_extra"}
+                latest_required_questions = {q["id"]: q for q in pair["analysis"]["blocking_questions"]
+                                             if q["id"] in required}
     has_stage_manifest = resume_run and (work / "stages.json").is_file()
     stages = StageManifest(work, "create", resume=bool(has_stage_manifest))
     print(json.dumps({"status": "started", "workspace": str(work),
@@ -691,19 +1336,64 @@ def run(args):
     business_sources = ([{'id': 'business_description', 'content': inputs['business_description']}] if inputs['business_description'] else []) + [
         {'id': f'spec-{index+1}', 'source': row['source'], 'content': row['content']}
         for index, row in enumerate(inputs['requirements'])]
+    frozen_standard_sources = standard_sources(inputs.get('standards', []))
+    review_sources = business_sources + frozen_standard_sources
     refinement = None
+    child_usage = copy.deepcopy(recovered_child_usage)
     analysis = resumed_analysis
     locked = resume_analysis_lock
+    agent.bind_state(state, elapsed=lambda: elapsed_before + time.monotonic() - started,
+                     extra_calls=lambda: child_usage["agent_calls"])
+
+    def observe_child_budget():
+        if not state.get("child_budget") and not (work / "refinement" / "state.json").is_file():
+            return
+        try:
+            observed = _read_child_budget(work, require_settled=False)
+            _apply_child_budget(work, state, observed,
+                                parent_elapsed=elapsed_before + time.monotonic() - started,
+                                parent_calls=agent.calls)
+            child_usage.update(observed)
+            state.pop("child_budget_error", None)
+        except RefinerError as exc:
+            state["child_budget_error"] = str(exc)
+            if isinstance(state.get("child_budget"), dict):
+                state["child_budget"]["reconciliation_required"] = True
+
+    def runtime_preflight(phase, analysis_value=None):
+        reused = []
+        if analysis_value is not None:
+            reused += ["analyze", "analysis-review"]
+        if resumed_draft:
+            reused.append("draft")
+        child_checkpoint = work / "refinement" / "resume-contract.json"
+        if (resume_run and child_checkpoint.is_file()) or resumed_suite:
+            # The child validates its own oracle/caches before determining its
+            # remaining path. Do not charge a second fresh planning path here.
+            print(json.dumps({"stage": "runtime_preflight", "status": "deferred",
+                              "phase": phase, "reason": "validated_by_refinement_child_before_execution"}), flush=True)
+            return
+        report = build_runtime_preflight(
+            mode="create", phase=phase, limits=limits,
+            usage={"agent_calls": agent.calls,
+                   "elapsed_seconds": elapsed_before + time.monotonic() - started,
+                   "target_evaluations": state.get("target_evaluations", 0)},
+            config=config, validated_reused_steps=reused,
+            executor_count=len(config["executors"]) if config else 1,
+            plan_only=bool(getattr(args, "plan_only", False)),
+            launch_context=getattr(args, "launch_context", None))
+        emit_runtime_preflight(report, work, f"runtime-preflight-{phase}.json")
 
     def event(status, **extra):
+        observe_child_budget()
         if status in CREATE_EVENTS:
             stage_id = CREATE_EVENTS[status]
             if not (resume_run and stages.is_completed(stage_id)):
                 stages.activate(stage_id)
-        state.update(status=status, elapsed_seconds=round(elapsed_before + time.monotonic() - started, 2),
-                     creation_agent_calls=agent.calls, agent_calls=agent.calls + (refinement or {}).get("agent_calls", 0),
+        state.update(status=status, elapsed_seconds=max(state.get("elapsed_seconds", 0), round(elapsed_before + time.monotonic() - started, 3)),
+                     creation_agent_calls=agent.calls, agent_calls=max(state.get("agent_calls", 0), agent.calls + child_usage["agent_calls"]),
                      cached_agent_calls=agent.cached_calls,
-                     target_evaluations=(refinement or {}).get("target_evaluations", 0), **extra)
+                     target_evaluations=max(state.get("target_evaluations", 0), child_usage["target_evaluations"]), **extra)
         write_json(work / 'state.json', state)
         print(json.dumps({'status': status, 'elapsed_seconds': state['elapsed_seconds'],
                           'max_seconds': args.max_seconds, **extra}, ensure_ascii=False), flush=True)
@@ -718,18 +1408,129 @@ def run(args):
 
     event('resuming' if resume or resume_run else 'analyzing')
     try:
-        feedback = []
-        for attempt in range(0 if resume or resume_analysis_complete else 2):
-            analysis = agent.ask('analyze',
+        runtime_preflight("before-analysis", resumed_analysis if resume_analysis_complete or resume else None)
+        feedback = [issue for row in rejected_analysis for issue in row['review'].get('issues', [])]
+        previous_analysis = rejected_analysis[-1]['analysis'] if rejected_analysis else None
+        if pending_analysis is None and unvalidated_analyses:
+            latest_invalid = unvalidated_analyses[-1]
+            previous_analysis = latest_invalid['analysis']
+            feedback.append('Resume the latest completed analysis from ' + latest_invalid['analysis_call'] +
+                            ' as a targeted correction input; its controller validation failed: ' +
+                            latest_invalid['validation_error'])
+        previous_reviews = [row['review'] for row in rejected_analysis]
+        if latest_clarification_state:
+            feedback += ['Latest pending clarification (' + row['question_id'] + ', ' + row['classification'] + '): ' +
+                         row['reason'] for row in latest_clarification_state['pair']['review']['question_assessments']]
+        legacy_technical = (pending_technical if pending_technical and
+                            pending_technical['analysis'].get('schema_version') != 'skill-refiner.analysis/v4' else None)
+        legacy_required_questions = {}
+        if legacy_technical:
+            required_question_ids = {row['question_id'] for row in legacy_technical['review']['question_assessments']
+                                     if row['classification'] != 'unsupported_extra'}
+            legacy_required_questions = {q['id']: q for q in legacy_technical['analysis']['blocking_questions']
+                                         if q['id'] in required_question_ids}
+            previous_analysis = previous_analysis or legacy_technical['analysis']
+            feedback += ['Replan the retained legacy technical analysis under analysis/v4. Preserve every original '
+                         'required/uncertain blocking question verbatim until independently routed to a retained '
+                         'technical gap. Keep all historical reviews and consumption; add separately sourced standard '
+                         'obligations without inventing spec citations or claiming old standards evidence is complete.']
+        rejected_fingerprints = {digest(row['analysis']) for row in rejected_analysis}
+        existing_attempts = [int(p.stem.rsplit('-', 1)[1]) for p in work.glob('analysis-attempt-*.json')
+                             if p.stem.rsplit('-', 1)[1].isdigit()]
+        attempt_offset = max([len(rejected_analysis), *existing_attempts], default=0)
+        if legacy_technical and not technical_coverage:
+            # Preserve the legacy source chain's actual technical derivation before
+            # asking for a new-format analysis. It is evidence of a gap, never a
+            # completed v4 analysis or permission to start target tests.
+            minimum_calls = 8 if getattr(args, 'plan_only', False) else 9
+            if args.max_agent_calls - agent.calls < minimum_calls:
+                raise RefinerError('Legacy technical upgrade needs one independent triage plus the new v4 '
+                                   f'workflow minimum ({minimum_calls} remaining calls); budget is not expanded')
+            from .technical_triage import route_technical_questions
+            triage_schema = read_json(Path(__file__).resolve().parents[2] / 'schemas/v1/technical-triage.schema.json')
+            triage = agent.ask('analysis-review',
+                'Independently classify the retained legacy blocking questions before schema upgrade. '
+                'technical_evidence only concerns actual observation capability for already required behavior. '
+                'Never downgrade a business decision; uncertain stays unresolved. Cite the existing required '
+                'requirement and applicable scenario IDs. This only retains a coverage gap, not proof.',
+                {'business_sources': business_sources, 'analysis': legacy_technical['analysis'],
+                 'clarification_review': legacy_technical['review']}, triage_schema)
+            triage_path = work / f'technical-triage-{attempt_offset + 1}.json'
+            if triage_path.exists():
+                raise RefinerError('Legacy triage evidence exists without settled coverage; reconcile before retry')
+            write_json(triage_path, triage)
+            derived, retained_gap = route_technical_questions(
+                legacy_technical['analysis'], triage, legacy_technical['review'])
+            if retained_gap:
+                technical_coverage = retained_gap
+                write_json(work / f'analysis-derived-technical-{attempt_offset + 1}.json', derived)
+                write_json(work / 'technical-coverage.json', technical_coverage)
+                state['technical_coverage_sha256'] = digest(technical_coverage)
+                write_json(work / 'state.json', state)
+                previous_analysis = previous_analysis or derived
+                legacy_required_questions = {q['id']: q for q in derived['blocking_questions']
+                                             if q['id'] in required_question_ids}
+        elif legacy_technical and technical_coverage:
+            from .technical_triage import route_technical_questions
+            matches = []
+            for path in sorted(work.glob('technical-triage-*.json')):
+                try:
+                    derived, gap = route_technical_questions(legacy_technical['analysis'], read_json(path),
+                                                            legacy_technical['review'])
+                except RefinerError:
+                    continue
+                if gap == technical_coverage:
+                    matches.append(derived)
+            if len(matches) != 1:
+                raise RefinerError('Legacy coverage needs exactly one verified triage before v4 upgrade')
+            legacy_required_questions = {q['id']: q for q in matches[0]['blocking_questions']
+                                         if q['id'] in required_question_ids}
+        # An independently rejected analysis and an independently identified
+        # unsupported clarification are different correction paths. Each is
+        # bounded once; neither spends the other's correction opportunity.
+        analysis_revisions = 0
+        clarification_revisions = 0
+        clarification_correction = None
+        if latest_clarification_state:
+            pair = latest_clarification_state['pair']
+            if any(row['classification'] == 'unsupported_extra'
+                   for row in pair['review']['question_assessments']):
+                # The recovered pair has already spent the clarification review
+                # call. Continue with its narrowly constrained correction rather
+                # than regenerating or re-reviewing the completed draft.
+                clarification_correction = (copy.deepcopy(pair['analysis']), copy.deepcopy(pair['review']))
+                clarification_revisions = 1
+        for attempt in range(0 if resume or resume_analysis_complete else 3):
+            review = None
+            revision_delta = None
+            reuse_technical = bool(pending_technical and not legacy_technical and attempt == 0)
+            reuse_pending_analysis = bool(pending_analysis and attempt == 0 and not reuse_technical)
+            analysis = (copy.deepcopy(pending_technical['analysis']) if reuse_technical else
+                        copy.deepcopy(pending_analysis['analysis']) if reuse_pending_analysis else agent.ask('analyze',
                 'Analyze the supplied business request into a scoped executable Agent Skill. Return schema_version '
-                'skill-refiner.analysis/v2 and satisfy every field in the supplied response_schema. Choose a concise kebab-case name '
+                'skill-refiner.analysis/v4 and satisfy every field in the supplied response_schema. Choose a concise kebab-case name '
                 'unless requested_name is supplied. Extract all business requirements with stable IDs and concrete source '
                 'citations into business_sources. Every requirement.source must begin with its source ID plus a colon '
                 '(for example spec-1: followed by the supporting passage). Include only business requirements from '
                 'these sources. For every workflow step, include a concrete completion_check that names observable '
                 'evidence proving the step is complete; do not use generic wording such as "done". Authoring standards, trigger description quality, script organization and controller '
-                'integrity remain in standards review; do not add them as business test requirements unless the user '
-                'explicitly requested that as an externally observable business capability. Split each material business '
+                'integrity are separately sourced standard obligations; do not add them as business requirements unless the user '
+                'explicitly requested that as an externally observable business capability. Distinguish target-owned '
+                'runtime schemas, validators and bounded self-review required by supplied authoring standards from '
+                'controller-private formats. Fill target_obligations: account for every frozen_standard_sources entry '
+                'with its exact supplied content_sha256. Give each obligation an O- ID, exact source quote and hash, '
+                'target/controller subject and source-based applicability rationale. Applicable target obligations need '
+                'atomic acceptance criteria, global scenario/workflow links, a concrete planned implementation interface '
+                'and independent evidence strategy. The global workflow/scenario requirement_ids may reference business '
+                'R IDs or applicable target O IDs. Keep controller-only and excluded obligations out of target tests. '
+                'Do not hide standard obligations in scope prose. For an unavailable actual implementation/observation '
+                'mechanism preserve a concrete coverage_gap linked in mechanism.gap_ids and state blocked. A planned '
+                'mechanism is not verified; ordinary future behavior tests are pending, not proof or an automatic gap. '
+                'Schema/validator validation, failure paths, bounded self-review correction/stop and dependency failures '
+                'must be testable when required by standards, without changing the public business I/O. Preserve standards without '
+                'inventing business rules. Never assert an internal record, candidate injection or verification capability '
+                'exists without evidence; record unverified mechanisms and coverage gaps for actual investigation. '
+                'Split each material business '
                 'requirement into small, independently observable acceptance_criteria; each criterion has a stable ID, one '
                 'outcome and evidence that could prove it. Do not combine separate decisions, outputs, permissions or side '
                 'effects into one criterion. Analyze the full workflow: actors, input variants, preconditions, state transitions, '
@@ -743,34 +1544,212 @@ def run(args):
                 'inputs, dependencies, side effects or recovery paths; paraphrases and cosmetic data changes do not add coverage. '
                 'These are detailed scenario intents, not frozen executable tests or implementation. '
                 'Do not add arbitrary business rules, integrations or approval policies. Explicitly record reasonable '
-                'nonmaterial implementation assumptions; missing material business rules belong in blocking_questions. '
+                'When previous_clarification_history is supplied, retain its complete latest analysis, per-question '
+                'feedback and unresolved questions. Its business-only unsupported_extra classification does not waive '
+                'independently sourced target standard obligations. Keep the original technical_coverage unresolved. '
+                'nonmaterial implementation assumptions; missing material business rules for requested or reasonably implied '
+                'behavior belong in blocking_questions. Never make an unrequested speculative capability a blocking '
+                'question. Explain a well-grounded exclusion in scope.out_of_scope. Do not dismiss real overlaps or '
+                'combinations required by the sources merely because the source does not use the same keywords; '
+                'when scope or required behavior is genuinely uncertain, retain the question. Do not invent a business '
+                'policy to avoid clarification. '
                 'Each blocking question must be concise and answerable, state the material choice needed, and avoid '
                 'requesting credentials or asking the user to diagnose an operational failure that can be checked. '
                 'Fill context.user_intent and usage_context; list primary users in actors and context.primary_user_ids. '
                 'Make scope.in_scope, scope.out_of_scope and scope.constraints explicit; if there is no excluded feature, '
                 'say so explicitly in out_of_scope. Give workflow steps contiguous order values, actor_ids, preconditions '
-                'and dependency_ids. Assess every supported risk dimension exactly once with a source-based applicability '
+                'and dependency_ids. Dependency IDs may refer to earlier workflow steps or declared real external dependencies; '
+                'never use self/forward step references or invent an external dependency. '
+                'Assess every supported risk dimension exactly once with a source-based applicability '
                 'decision, rationale and scenario links. Structure assumptions, external_dependencies and blocking_questions '
                 'according to the schema; use [] only when none exist. Do not claim an external dependency is verified or replace real services with fabricated success. '
-                'Keep dependencies to the user scope. A category is inapplicable only with a concrete scope-based reason; '
-                'normal behavior is always applicable. Do not implement code or provide test answers at this stage.',
-                {**inputs, 'business_sources': business_sources, 'validation_feedback': feedback}, ANALYSIS)
-            write_json(work / f'analysis-attempt-{attempt+1}.json', analysis)
+                 'Keep dependencies to the user scope. A category is inapplicable only with a concrete scope-based reason; '
+                 'normal behavior is always applicable. The analysis scenario inventory is not the executable case count: '
+                 'do not infer a one-to-one case count, ask the user to expand capacity, or stop analysis from scenario count. '
+                 'Preserve all applicable scenarios and their requirement/criterion links. The frozen development and '
+                 'acceptance plans determine their actual distinct case counts and must link each case to the scenarios '
+                 'and criteria it meaningfully exercises under the active plan schema. The planning gate checks those '
+                 'links and each suite limit before target evaluation; if the complete valid plan exceeds capacity, block '
+                 'there with actual and allowed counts. Never omit or falsely exclude a real scenario to fit capacity. '
+                 'For an excluded scenario without relevant requirements, use empty '
+                'requirement_ids and acceptance_criteria_ids, detail null, and a concrete exclusion_reason; do not invent '
+                'test steps or requirement links. Do not implement code or provide test answers at this stage.',
+                {**inputs, 'business_sources': business_sources, 'frozen_standard_sources': frozen_standard_sources,
+                 'validation_feedback': feedback,
+                 **({'previous_technical_clarification': legacy_technical} if legacy_technical else {}),
+                 **({'technical_coverage': technical_coverage} if technical_coverage else {}),
+                 **({'previous_clarification_history': latest_clarification_state['pair'],
+                     'retained_clarification_questions': list(latest_required_questions.values())}
+                    if latest_clarification_state else {}),
+                 **({'retained_legacy_questions': list(legacy_required_questions.values())} if legacy_technical else {}),
+                 'test_case_capacity': {'development': args.max_cases, 'acceptance': args.acceptance_cases},
+                 **({'previous_analysis_reviews': previous_reviews} if previous_reviews else {}),
+                 **({'previous_analysis': clarification_correction[0],
+                     'clarification_review': clarification_correction[1]} if clarification_correction else
+                    {'previous_analysis': previous_analysis}
+                     if previous_analysis is not None else {})}, ANALYSIS))
+            attempt_number = (pending_analysis_attempt if reuse_pending_analysis else
+                              attempt_offset + attempt + 1)
+            attempt_path = work / f'analysis-attempt-{attempt_number}.json'
+            if attempt_path.exists():
+                if not reuse_pending_analysis or read_json(attempt_path) != analysis:
+                    raise RefinerError('Analysis attempt evidence already exists; refusing to overwrite it')
+            else:
+                write_json(attempt_path, analysis)
             try:
-                validate_analysis(analysis, args.name, {s['id'] for s in business_sources})
+                validate_analysis(analysis, args.name, {s['id'] for s in business_sources},
+                                  standards=inputs.get('standards'))
+                analysis, routed_capacity_questions = route_controller_capacity_questions(analysis)
+                if routed_capacity_questions:
+                    route_path = work / f'controller-capacity-routing-attempt-{attempt_number}.json'
+                    if route_path.exists():
+                        raise RefinerError('Controller capacity routing evidence already exists; refusing to overwrite it')
+                    write_json(route_path, {
+                        'schema_version': 'skill-refiner.controller-capacity-routing/v1',
+                        'attempt': attempt_number,
+                        'routed_questions': routed_capacity_questions,
+                        'decision': 'defer_to_frozen_plan_case_ids_and_coverage_links',
+                        'user_clarification_requested': False,
+                    })
+                if legacy_technical:
+                    current_questions = {q['id']: q for q in analysis['blocking_questions']}
+                    if any(current_questions.get(qid) != q for qid, q in legacy_required_questions.items()):
+                        raise RefinerError('Legacy required technical/business questions must be retained until '
+                                           'independently reviewed and routed with explicit coverage evidence')
+                if latest_required_questions:
+                    current_questions = {q['id']: q for q in analysis['blocking_questions']}
+                    if any(current_questions.get(qid) != q for qid, q in latest_required_questions.items()):
+                        raise RefinerError('Latest required/uncertain clarification questions must be retained; '
+                                           'an older technical gap does not resolve them')
+                if digest(analysis) in rejected_fingerprints:
+                    raise RefinerError('Analysis revision made no progress: this analysis was independently rejected before')
+                if clarification_correction:
+                    try:
+                        validate_clarification_revision(
+                            clarification_correction[0], analysis, clarification_correction[1],
+                            allow_v3_to_v4=bool(latest_clarification_state))
+                    except RefinerError as exc:
+                        raise ClarificationRevisionGateError(str(exc)) from exc
+                    clarification_correction = None
                 if analysis['blocking_questions']:
+                    clarification_schema = read_json(Path(__file__).resolve().parents[2] /
+                                                     'schemas/v1/clarification-review.schema.json')
+                    try:
+                        clarification_review = copy.deepcopy(pending_technical['review']) if reuse_technical else agent.ask('analysis-review',
+                        'Independently assess each proposed blocking question against the original business sources. '
+                        'Classify it as required_in_scope, unsupported_extra, or uncertain. Return each question exactly '
+                        'once, and cite exact original source excerpts with their supplied source IDs for required and '
+                        'unsupported classifications. A required behavior may be implicit in an explicitly covered '
+                        'workflow or a combination/overlap of its rules; never treat missing keywords alone as proof '
+                        'of exclusion. Evaluate the combination risk for every question. Distinguish actual overlapping '
+                        'conditions affecting one requested behavior from an unrequested feature to aggregate unrelated '
+                        'issues. Mark unsupported_extra only when the source-based scope supports that exclusion and no '
+                        'requested or reasonably implied behavior depends on it; otherwise use uncertain. For an '
+                        'unsupported extra list every required requirement ID examined and cite each original source '
+                        'supporting those requirements, in addition to a concrete out_of_scope statement; do not invent a business policy. '
+                        'Required or uncertain questions remain blocking. Return the complete supplied JSON schema.',
+                            {'business_sources': business_sources, 'analysis': analysis}, clarification_schema)
+                        write_json(work / f'clarification-review-attempt-{attempt_number}.json', clarification_review)
+                        validate_clarification_review(clarification_review, analysis, business_sources)
+                    except Cancelled:
+                        raise
+                    except RefinerError as exc:
+                        raise ClarificationGateError(f'Clarification review could not be verified: {exc}') from exc
+                    extras = [row for row in clarification_review['question_assessments']
+                              if row['classification'] == 'unsupported_extra']
+                    if extras:
+                        if clarification_revisions:
+                            raise ClarificationGateError('Clarification review did not converge within the analysis revision budget')
+                        clarification_revisions += 1
+                        clarification_correction = (copy.deepcopy(analysis), copy.deepcopy(clarification_review))
+                        feedback = feedback + ['Remove only the independently reviewed unsupported questions and append exactly '
+                                               'their out_of_scope statements. Preserve every other analysis field, scenario, '
+                                               'requirement and required or uncertain question verbatim; return the full analysis.']
+                        continue
+                    from .technical_triage import route_technical_questions
+                    triage_schema = read_json(Path(__file__).resolve().parents[2] / 'schemas/v1/technical-triage.schema.json')
+                    triage = agent.ask('analysis-review',
+                        'Independently classify each blocking question by who can resolve it. technical_evidence '
+                        'is strictly for verifying controller or test observation capability for behavior already '
+                        'required by the supplied business sources; reference the actual required requirement and '
+                        'applicable scenario IDs. Never classify a material business rule or user decision as '
+                        'technical. If the distinction is uncertain use uncertain. A technical classification '
+                        'does not prove a capability or waive any requirement.',
+                        {'business_sources': business_sources, 'analysis': analysis,
+                         'clarification_review': clarification_review}, triage_schema)
+                    write_json(work / f'technical-triage-{attempt_number}.json', triage)
+                    derived, new_gap = route_technical_questions(analysis, triage, clarification_review)
+                    if new_gap:
+                        if technical_coverage and technical_coverage != new_gap:
+                            raise RefinerError('Multiple different technical coverage records require explicit reconciliation')
+                        technical_coverage = new_gap
+                        write_json(work / f'analysis-derived-technical-{attempt_number}.json', derived)
+                        write_json(work / 'technical-coverage.json', technical_coverage)
+                        state['technical_coverage_sha256'] = digest(technical_coverage)
+                        write_json(work / 'state.json', state)
+                        analysis = derived
+                # Unsupported questions have been reviewed and, if needed,
+                # corrected in the bounded pass above. Technical questions have
+                # now been converted to explicit controller coverage gaps. Case
+                # capacity is also a controller limit and is checked before any
+                # material business question is surfaced to the user.
+                preflight_creation_case_capacity(analysis, args.max_cases, args.acceptance_cases)
+                if analysis['blocking_questions']:
+                    clarification_by_id = {
+                        row['question_id']: row['classification']
+                        for row in clarification_review['question_assessments']
+                    }
+                    triage_by_id = {row['question_id']: row['domain'] for row in triage['assessments']}
+                    business_questions = [
+                        row for row in analysis['blocking_questions']
+                        if clarification_by_id.get(row['id']) == 'required_in_scope'
+                        and triage_by_id.get(row['id']) == 'business_decision'
+                    ]
+                    unresolved = [row for row in analysis['blocking_questions']
+                                  if row['id'] not in {question['id'] for question in business_questions}]
+                    if unresolved:
+                        details = [
+                            {'question_id': row['id'],
+                             'clarification_classification': clarification_by_id.get(row['id']),
+                             'technical_domain': triage_by_id.get(row['id'])}
+                            for row in unresolved
+                        ]
+                        raise ClarificationGateError(
+                            'Remaining blocking questions were not independently established as material '
+                            'in-scope business decisions; no user clarification was requested: '
+                            + json.dumps(details, ensure_ascii=False)
+                        )
                     write_json(work / 'analysis.json', analysis)
-                    event('needs_clarification', questions=[row['question'] for row in analysis['blocking_questions']])
+                    event('needs_clarification', questions=[row['question'] for row in business_questions])
                     return state
+                if previous_analysis is not None:
+                    from .artifact_validation import schema_ref, validate_value
+                    revision_delta = analysis_revision_delta(previous_analysis, analysis)
+                    validate_value(revision_delta, schema_ref('skill-refiner.analysis-revision-delta-v2'),
+                                   subject='analysis revision delta')
+                    delta_path = work / f'analysis-revision-delta-{attempt_number}.json'
+                    if delta_path.exists():
+                        raise RefinerError('Analysis revision delta already exists; refusing to overwrite it')
+                    write_json(delta_path, revision_delta)
+                review = None
                 review = agent.ask('analysis-review',
-                    'Return schema_version skill-refiner.analysis-review/v2 and independently review every required analysis '
+                    ('Return schema_version skill-refiner.analysis-review/v4. Fill revision_assessments for every '
+                     'delta change, or [] if none. Assess every frozen standard source for completeness and correct '
+                     'subject boundary and every O obligation for exact source/hash, applicability, atomic criteria, '
+                     'concrete mechanisms/gaps and scenario/workflow coverage. Do not treat controller-only policy as '
+                     'target business behavior. Requirement assessments cover the supplied effective_contract (R+target O). '
+                     if analysis.get('schema_version') == 'skill-refiner.analysis/v4' else
+                     'Return schema_version skill-refiner.analysis-review/v3 and assess every change separately. '
+                     if revision_delta else 'Return schema_version skill-refiner.analysis-review/v2. ') +
+                    'Independently review every required analysis '
                     'element against the original request and supplied standards. Fill context_scope_assessment, one '
                     'workflow_assessment per step, one risk_assessment per supported dimension, dependencies_assessed '
                     'and blocking_decisions_actionable from evidence. '
                     'Check every requested behavior is retained, requirements are decomposed into atomic acceptance '
                     'criteria with independently observable evidence, and every criterion is grounded; cite the '
                     'specific request or explicit reasonable implementation assumption for every assessment. Assess every '
-                    'scenario ID exactly once. Reject scenarios lacking preconditions, a concrete stimulus, ordered actions, '
+                    'scenario ID exactly once. For an excluded scenario, review its scope justification; executable detail '
+                    'and requirement links can be absent. Reject applicable scenarios lacking preconditions, a concrete stimulus, ordered actions, '
                     'observable expected outcomes, forbidden outcomes, risk dimensions or requirement/criterion traceability. '
                     'Confirm every required criterion is covered by an applicable scenario; inspect workflow-state, permissions, '
                     'dependencies, cross-requirement effects, side effects, retries/idempotency and recovery when they apply. '
@@ -780,24 +1759,77 @@ def run(args):
                     'failure behavior and requirement links are clear. Reject '
                     'invented material business rules, omitted workflows, fabricated dependencies, arbitrary error '
                     'contracts and unjustified exclusions of normal/boundary/error scenarios. Do not require features '
-                    'the user excluded. Approve only a clear, scoped contract suitable for independent test planning.',
-                    {'inputs': inputs, 'analysis': analysis}, ANALYSIS_REVIEW)
-                write_json(work / 'analysis-review.json', review)
+                    'the user excluded. Runtime capacity and validation feedback are controller context, not business '
+                    'requirements; recognize their provenance and do not claim they were absent from the supplied context. '
+                    'Distinguish target-owned standard obligations from controller-private formats and verify their '
+                    'actual observable mechanisms; do not invent business source IDs for authoring standards. '
+                    'For a revision, inspect each before/after item and changed path, including unchanged IDs with changed '
+                    'business meaning, criteria, risk, evidence or scenarios. In revision_assessments return exactly one '
+                    'entry per delta change with its exact hashes, classify the outcome, identify the concrete revised '
+                    'requirement, acceptance criterion or applicable scenario that preserves coverage in replacement_refs, '
+                    'and explain how it does so. A correction removing an unsupported item may use excluded_by_source '
+                    'only with an exact source-based exclusion reason. Cite exact excerpts from review_sources with source IDs. '
+                    'Mark missing coverage or uncertainty as such and do not approve it. Equivalent wording may be approved; '
+                    'do not accept reduction merely to fit case capacity. Standards-owned obligations are not business '
+                    'source requirements; assess their real ownership without inventing a spec citation. '
+                    'A technical coverage gap is unresolved controller evidence, not proof; retain all business requirements. '
+                    'Approve only a clear, scoped contract suitable for independent test planning.',
+                    {'inputs': inputs, 'analysis': analysis, 'technical_coverage': technical_coverage,
+                     **({'previous_clarification_history': latest_clarification_state['pair']}
+                        if latest_clarification_state else {}),
+                     'review_sources': review_sources, 'effective_contract': effective_requirements(analysis),
+                     'runtime_context': {'test_case_capacity': {'development': args.max_cases, 'acceptance': args.acceptance_cases},
+                                         'validation_feedback': feedback},
+                     **({'previous_analysis': previous_analysis, 'previous_analysis_reviews': previous_reviews,
+                         'revision_delta': revision_delta} if revision_delta else {})},
+                    ANALYSIS_REVIEW_V4 if analysis.get('schema_version') == 'skill-refiner.analysis/v4' else
+                    ANALYSIS_REVIEW_V3 if revision_delta else ANALYSIS_REVIEW)
+                review_path = work / f'analysis-review-attempt-{attempt_number}.json'
+                if review_path.exists():
+                    raise RefinerError('Analysis review evidence already exists; refusing to overwrite it')
+                write_json(review_path, review)
                 validate_analysis_review(review, analysis)
+                if revision_delta:
+                    validate_analysis_revision_review(review, revision_delta, review_sources, analysis)
                 if not review['approved']:
                     raise RefinerError('; '.join(review['issues']))
+                canonical_review = work / 'analysis-review.json'
+                if canonical_review.is_file():
+                    snapshot_path = work / 'analysis-previous' / ('analysis-review-' + hashlib.sha256(canonical_review.read_bytes()).hexdigest() + '.json')
+                    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+                    if not snapshot_path.exists():
+                        shutil.copy2(canonical_review, snapshot_path)
+                write_json(canonical_review, review)
+            except Cancelled:
+                raise
             except RefinerError as exc:
-                if attempt:
+                if isinstance(exc, (ClarificationGateError, ClarificationRevisionGateError,
+                                    AnalysisRevisionGateError, CreationCapacityError)) or 'made no progress' in str(exc):
                     raise
-                feedback = [str(exc)]
+                # Analysis-structure repair and clarification repair are separate
+                # budgets. A completed clarification correction must not consume
+                # the independent analysis correction opportunity.
+                if analysis_revisions:
+                    raise
+                analysis_revisions += 1
+                feedback = feedback + [str(exc)]
+                if 'review' in locals() and isinstance(review, dict) and review.get('approved') is False:
+                    previous_analysis = analysis
+                    previous_reviews.append(review)
+                    rejected_fingerprints.add(digest(analysis))
                 continue
             break
-        write_json(work / 'analysis.json', analysis)
-        (work / 'business-analysis.md').write_text(analysis_markdown(analysis), encoding="utf-8")
+        if not (resume_run and resume_analysis_complete):
+            write_json(work / 'analysis.json', analysis)
+            (work / 'business-analysis.md').write_text(analysis_markdown(analysis), encoding="utf-8")
         write_work_plan(work, analysis=analysis, limits=limits,
                         agent_parallelism=getattr(args, "agent_parallelism", 2))
         locked = digest({'inputs': inputs, 'analysis': analysis})
-        write_json(work / 'business.lock.json', {'sha256': locked, 'input_sha256': input_hash})
+        if not (resume_run and resume_analysis_complete):
+            write_json(work / 'business.lock.json', {'sha256': locked, 'input_sha256': input_hash})
+        if not stages.is_completed("analysis"):
+            stages.complete("analysis")
+        runtime_preflight("after-analysis", analysis)
         integrity()
         event('reusing_draft' if resumed_draft else 'creating', skill_name=analysis['name'])
         feedback = []
@@ -813,7 +1845,8 @@ def run(args):
         for attempt in range(0 if resumed_draft else 2):
             draft = agent.ask('draft',
                 DRAFT_INSTRUCTION,
-                {'inputs': inputs, 'analysis': analysis, 'validation_feedback': feedback,
+                {'inputs': inputs, 'analysis': analysis, 'effective_contract': effective_requirements(analysis),
+                 'validation_feedback': feedback,
                  **({'previous_draft': previous_draft} if previous_draft else {})}, DRAFT)
             previous_draft = draft
             draft, mapping = normalize_draft(draft, analysis['name'])
@@ -823,7 +1856,7 @@ def run(args):
             try:
                 apply_changes(draft_root, {'changes': [{'path': f['path'], 'content': f['content'],
                     'reason': f['reason'], 'evidence_ids': f['requirement_ids']} for f in draft['files']]},
-                    {r['id'] for r in analysis['requirements']})
+                    {r['id'] for r in effective_requirements(analysis)})
                 findings = lint(draft_root, analysis['name'])
                 write_json(draft_root.parent / 'static-findings.json', findings)
                 if any(f['severity'] == 'error' for f in findings):
@@ -864,8 +1897,13 @@ def run(args):
                 archived = attempts / f"attempt-{max(prior_attempts, default=0)+1:03}"
                 shutil.move(child.output, archived)
         applicable_scenarios = [s for s in analysis['scenarios'] if s['applicable']]
-        child.creation_context = {'contract': analysis['requirements'], 'business_analysis': analysis,
+        child.creation_context = {'contract': effective_requirements(analysis), 'business_analysis': analysis,
+                                  **({'_response_contract_v7': inputs['_response_contract_v7']}
+                                     if '_response_contract_v7' in inputs else {}),
+                                  **({'creation_standard_sources': copy.deepcopy(inputs['standards'])}
+                                     if analysis.get('schema_version') == 'skill-refiner.analysis/v4' else {}),
                                   'execution_helpers': PYTHON_OBSERVER_GUIDE,
+                                  'technical_coverage_gaps': [technical_coverage] if technical_coverage else [],
                                   'required_case_kinds': sorted({s['kind'] for s in applicable_scenarios}),
                                   'required_scenario_ids': [s['id'] for s in applicable_scenarios]}
         if resumed_suite:
@@ -873,19 +1911,24 @@ def run(args):
             child.spec = [row['source'] for row in prior_context['requirements']]
             child.standard = [row['source'] for row in prior_context['standards'] if isinstance(row,dict)]
             child.reuse_plan = str(resumed_suite)
-        scenario_minimum = max(len(child.creation_context['required_scenario_ids']), 2)
-        if scenario_minimum > min(args.max_cases, args.acceptance_cases):
-            raise RefinerError('Development/acceptance case limits cannot cover every applicable scenario ID; '
-                               f'{scenario_minimum} scenarios require at least that many cases in each suite')
+        child_usage.update(_read_child_budget(work))
+        _record_child_budget_entry(work, state, parent_elapsed=elapsed_before + time.monotonic() - started,
+                                   parent_calls=agent.calls, child_usage=child_usage)
         event('refining', refinement_workspace=child.output)
         refinement = refine(child)
+        observe_child_budget()
+        # A returned verdict is not proof that its processes and reservations
+        # closed. The lenient observer is only for retaining costs on failure.
+        child_usage.update(_read_child_budget(work))
+        child_usage["agent_calls"] = max(child_usage["agent_calls"], refinement.get("agent_calls", 0))
+        child_usage["target_evaluations"] = max(child_usage["target_evaluations"], refinement.get("target_evaluations", 0))
         integrity()
         if manifest(draft_root) != initial_manifest:
             raise RefinerError('Original generated draft changed during refinement')
         state['refinement_status'] = refinement['status']
         state['evaluation_history'] = refinement.get('evaluation_history', state.get('evaluation_history', []))
         state['refinement_rounds'] = refinement.get('rounds', [])
-        state['target_evaluations'] = refinement.get('target_evaluations', 0)
+        state['target_evaluations'] = max(state.get('target_evaluations', 0), refinement.get('target_evaluations', 0))
         write_work_plan(work, source=draft_root, analysis=analysis, limits=limits,
                         agent_parallelism=getattr(args, "agent_parallelism", 2))
         if refinement['status'] == 'planned':
@@ -898,7 +1941,7 @@ def run(args):
                   max_rounds=args.max_rounds, max_seconds=args.max_seconds,
                   max_evaluations=args.max_evaluations)
             state.update(status='planned', planned_only=True,
-                         elapsed_seconds=round(elapsed_before + time.monotonic() - started, 2))
+                         elapsed_seconds=round(elapsed_before + time.monotonic() - started, 3))
             write_json(work / 'state.json', state)
             return state
         if refinement['status'] not in {'passed', 'unchanged'}:
@@ -937,12 +1980,14 @@ def run(args):
         event('error', error=str(exc))
         return state
     finally:
+        observe_child_budget()
         if analysis is not None and not (work / 'business-analysis.md').exists():
             (work / 'business-analysis.md').write_text(analysis_markdown(analysis), encoding="utf-8")
-        state.update(agent_calls=agent.calls + (refinement or {}).get('agent_calls', 0),
-                     creation_agent_calls=agent.calls, target_evaluations=(refinement or {}).get('target_evaluations', 0),
+        state.update(agent_calls=max(state.get('agent_calls', 0), agent.calls + child_usage['agent_calls']),
+                     creation_agent_calls=agent.calls,
+                     target_evaluations=max(state.get('target_evaluations', 0), child_usage['target_evaluations']),
                      cached_agent_calls=agent.cached_calls,
-                     elapsed_seconds=round(elapsed_before + time.monotonic() - started, 2))
+                     elapsed_seconds=max(state.get('elapsed_seconds', 0), round(elapsed_before + time.monotonic() - started, 3)))
         write_json(work / 'state.json', state)
         lines = ['# Business Skill creation', '', 'Status: **' + state['status'] + '**', '',
                  'Business analysis: [business-analysis.md](business-analysis.md)',
@@ -963,7 +2008,7 @@ def run(args):
             stages.activate('verification')
             try:
                 from .gate import verify_run
-                verification = verify_run(work)
+                verification = verify_run(work, deadline=started + max(0, args.max_seconds - elapsed_before))
                 write_json(work / 'verification.json', verification)
                 state['verification_status'] = verification['status']
                 if destination:

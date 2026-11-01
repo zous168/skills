@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.static-findings",
+  "x-schema-version": "v1",
+  "title": "Skill 草稿静态检查结果",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "rule", "path", "message", "severity"],
+    "properties": {
+      "id": {"type": "string", "minLength": 1},
+      "rule": {"type": "string", "minLength": 1},
+      "path": {"type": "string", "minLength": 1},
+      "message": {"type": "string", "minLength": 1},
+      "severity": {"enum": ["error", "warning", "info"]}
+    },
+    "additionalProperties": false
+  }
+}

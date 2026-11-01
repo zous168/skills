@@ -16,7 +16,10 @@ from .artifact_validation import (all_schema_refs, content_schema_id, schema_ref
 
 
 def _a(path, media_type=None, glob=False, required=True):
-    contract_id = ("skill-refiner.artifact-record" if glob or "*" in path
+    # Analysis handoffs can be legitimately reused from a historical version;
+    # the inventory binds and validates the exact schema selected from content.
+    contract_id = ("skill-refiner.artifact-record" if glob or "*" in path or path in {
+                       "analysis.json", "analysis-review.json", "test-plan.json", "acceptance-plan.json"}
                    else content_schema_id(Path(path), media_type))
     return {"path": path, "media_type": media_type, "glob": glob, "required": required,
             "contract_id": contract_id,
@@ -29,7 +32,13 @@ def _calls(role):
     return [_a(f"agent-calls/*-{role}/{name}", media_type, True, required=False)
             for name, media_type in (("request.json", "application/json"),
                                      ("request-manifest.json", "application/json"),
+                                     ("contract-errors.json", "application/json"),
                                      ("transmission.txt", "text/plain"),
+                                     ("execution.json", "application/json"),
+                                     ("process.execution.json", "application/json"),
+                                     ("process.log", "text/plain"),
+                                     ("process.stdout.log", "text/plain"),
+                                     ("process.stderr.log", "text/plain"),
                                      ("response.json", "application/json"))]
 
 
@@ -64,6 +73,8 @@ CONTRACTS = {
          "failure_states": ["coverage_gap", "error"]},
         {"id": "baseline", "inputs": [_a("test-plan.json"), _a("original/**", glob=True)],
          "outputs": [_a("baseline/summary.json"), _a("baseline/standards.json"),
+                     _a("baseline/evaluation-cost.json", required=False),
+                     _a("baseline/resume-attempts/attempt-*/evaluation-cost.json", glob=True, required=False),
                      _a("baseline/resume-cache.json", required=False), *_calls("standards-review")],
          "validation_gate": {"id": "baseline-observed", "implementation": "evaluate; standards_review; reject execution ERROR"},
          "failure_states": ["execution_error", "error"]},
@@ -76,6 +87,8 @@ CONTRACTS = {
          "failure_states": ["no_progress", "error"]},
         {"id": "regression", "inputs": [_a("iterations/round-*/changes.json", glob=True), _a("test-plan.json")],
          "outputs": [_a("iterations/round-*/regression/summary.json", glob=True),
+                     _a("iterations/round-*/regression/evaluation-cost.json", glob=True, required=False),
+                     _a("iterations/round-*/regression/resume-attempts/attempt-*/evaluation-cost.json", glob=True, required=False),
                      _a("iterations/round-*/regression/resume-cache.json", glob=True, required=False),
                      _a("iterations/round-*/standards.json", glob=True), *_calls("standards-review")],
          "validation_gate": {"id": "same-suite-no-regressions", "implementation": "compare_candidate; qualifies"},
@@ -90,7 +103,8 @@ CONTRACTS = {
          "validation_gate": {"id": "evidence-bound-candidate", "implementation": "snapshot; digest"},
          "failure_states": ["error"]},
         {"id": "verification", "inputs": [_a("final/evidence.json")],
-         "outputs": [_a("verification.json"), _a("report.md", "text/markdown")],
+         "outputs": [_a("verification.json"), _a("report.md", "text/markdown"),
+                     _a("runtime-preflight*.json", glob=True, required=False)],
          "validation_gate": {"id": "machine-completion-gate", "implementation": "verify_run"},
          "failure_states": ["verification_failed", "error"]},
     ],
@@ -100,7 +114,14 @@ CONTRACTS = {
          "failure_states": ["error"]},
         {"id": "analysis", "inputs": [_a("inputs.json"), _a("inputs/**", "text/plain", True)],
          "outputs": [_a("analysis.json"), _a("analysis-review.json"), _a("business-analysis.md", "text/markdown"),
-                     _a("business.lock.json"), *_calls("analyze"), *_calls("analysis-review")],
+                     _a("business.lock.json"), _a("analysis-attempt-*.json", glob=True, required=False),
+                     _a("analysis-review-attempt-*.json", glob=True, required=False),
+                     _a("analysis-revision-delta-*.json", glob=True, required=False),
+                     _a("technical-triage-*.json", glob=True, required=False),
+                     _a("analysis-derived-technical-*.json", glob=True, required=False),
+                     _a("technical-coverage.json", required=False),
+                     _a("clarification-review-attempt-*.json", glob=True, required=False),
+                     *_calls("analyze"), *_calls("analysis-review")],
          "validation_gate": {"id": "grounded-reviewed-business-contract", "implementation": "validate_analysis; validate_analysis_review"},
          "failure_states": ["needs_clarification", "error"]},
         {"id": "draft", "inputs": [_a("analysis.json"), _a("business.lock.json")],
@@ -118,7 +139,8 @@ CONTRACTS = {
          "validation_gate": {"id": "created-candidate-binds-refinement", "implementation": "snapshot; refinement evidence digest"},
          "failure_states": ["error"]},
         {"id": "verification", "inputs": [_a("refinement/verification.json"), _a("final/evidence.json")],
-         "outputs": [_a("verification.json"), _a("report.md", "text/markdown")],
+         "outputs": [_a("verification.json"), _a("report.md", "text/markdown"),
+                     _a("runtime-preflight*.json", glob=True, required=False)],
          "validation_gate": {"id": "machine-creation-completion-gate", "implementation": "verify_run"},
          "failure_states": ["verification_failed", "error"]},
     ],
@@ -354,6 +376,12 @@ class StageManifest:
 
     def complete(self, stage_id):
         stage = next(row for row in self.data["stages"] if row["id"] == stage_id)
+        if stage["status"] == "completed":
+            # Reuse an immutable handoff without refreshing timestamps/hashes.
+            # Explicit activate() is required for a genuine later execution pass.
+            self._validate_inventory(stage, "artifacts", require_recorded_pass=True)
+            self._validate_inventory(stage, "input_artifacts", require_recorded_pass=True)
+            return
         self._capture_outputs(stage)
         self._assert_outputs(stage)
         self._bind_inventory(stage, "artifacts")

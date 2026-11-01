@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 
 from .common import read_json
+from .standards import HOST_SUBAGENT_TEST_RULES
 
 
 def _md(value):
@@ -375,6 +376,13 @@ def write_work_plan(work, *, source=None, plan=None, acceptance=None, analysis=N
         for item in analysis.get("scenarios", []):
             applicability = "included" if item["applicable"] else "excluded"
             detail = item["detail"]
+            if detail is None:
+                lines += [f"- **{item['id']} / {item['kind']} — {applicability}:** {_md(item['situation'])}",
+                          f"  - Requirements: {', '.join(item['requirement_ids'])}; criteria: "
+                          f"{', '.join(item['acceptance_criteria_ids'])}",
+                          f"  - Basis: {_md(item['basis'])}",
+                          f"  - Exclusion reason: {_md(item['exclusion_reason'])}"]
+                continue
             lines += [f"- **{item['id']} / {item['kind']} — {applicability}:** {_md(item['situation'])}",
                       f"  - Requirements: {', '.join(item['requirement_ids'])}; criteria: "
                       f"{', '.join(item['acceptance_criteria_ids'])}",
@@ -463,6 +471,8 @@ def write_work_plan(work, *, source=None, plan=None, acceptance=None, analysis=N
         lines.extend(f"- {row['dimension']}: {'applicable' if row['applicable'] else 'not applicable'}; "
                      f"{_md(row['basis'])}; scenarios: {', '.join(row['scenario_ids']) or 'none'}"
                      for row in analysis["risk_assessments"])
+    lines += ["", "## Test delegation and case-level progress", ""]
+    lines.extend(f"- {_md(rule)}" for rule in HOST_SUBAGENT_TEST_RULES)
     lines += [""] + _execution_phase_markdown(analysis, agent_parallelism=agent_parallelism)
     lines += ["", "## Acceptance criteria", "",
               "- Every required behavior is covered by the frozen, independently reviewed cases.",
@@ -475,7 +485,12 @@ def write_work_plan(work, *, source=None, plan=None, acceptance=None, analysis=N
         for case in acceptance.get("cases", []):
             lines.extend(_render_case_block(case, acceptance_reqs))
             lines.append("")
-    lines += ["", "## Test checklist", ""]
+    lines += ["", "## Test checklist", "",
+              "Each case is a separate acceptance item with its own ID, scenario, expected outcome, assertions and evidence. "
+              "Record PASS, FAIL, ERROR or NOT_RUN for each case individually; a case passes only when all of its "
+              "linked assertions pass with evidence. NOT_RUN, ERROR, missing evidence or a missing required case "
+              "never counts as a pass. The suite gate passes only when every required case passes on every configured "
+              "executor; aggregate counts cannot replace case-level results.", ""]
     for label, suite_plan in (("Development / baseline and regression", plan),
                               ("Independent acceptance", acceptance)):
         lines += [f"### {label}", ""]
@@ -562,7 +577,10 @@ def write_test_scenarios(work, *, plan=None, acceptance=None):
             if candidate.is_file():
                 acceptance = read_json(candidate)
                 break
-    lines = ["# Executable scenario inventory", ""]
+    lines = ["# Executable scenario inventory", "",
+             "Acceptance rule: evaluate each case independently by its stable ID. Record its own result and evidence; "
+             "only PASS with all linked checks satisfied is accepted. FAIL, ERROR, NOT_RUN, missing evidence or a "
+             "missing required case blocks the suite gate.", ""]
     if plan:
         lines.extend(_suite_case_markdown("Development", plan))
     if acceptance:

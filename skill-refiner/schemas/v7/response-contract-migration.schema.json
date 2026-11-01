@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.response-contract-migration/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "inputs_sha256",
+    "recovery_sha256",
+    "source_plan_schema_version",
+    "selected_plan_schema_version",
+    "usage",
+    "migration_schema_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "skill-refiner.response-contract-migration/v1"
+    },
+    "inputs_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "recovery_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_plan_schema_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selected_plan_schema_version": {
+      "const": "skill-refiner.plan/v7"
+    },
+    "usage": {
+      "type": "object"
+    },
+    "migration_schema_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

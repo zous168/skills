@@ -22,7 +22,8 @@ instead of interpolating it into executable shell text.
    Assess normal, boundary and error scenarios and map required behavior to them.
 2. Independently review grounding against the original request. Reject invented
    material rules, omissions and unjustified category exclusions. Allow one bounded
-   analysis revision. Material unanswered business decisions stop with questions.
+   analysis revision. Material unanswered real-business decisions stop with questions;
+   handle reversible gaps in explicitly synthetic examples as documented assumptions.
 3. Freeze the approved analysis and original inputs by hash. Create actual Skill
    instructions, references and working implementations. Reject unsafe/protected
    paths. Static errors allow one bounded regeneration. No author sees held-out tests.
@@ -30,8 +31,12 @@ instead of interpolating it into executable shell text.
 stops after the first draft and reviewed development/acceptance plans are ready;
 inspect `business-analysis.md`, `work-plan.md` and `test-scenarios.md`, then continue
 the same workspace with `create --resume-run RUN_DIRECTORY`. The parent
-`large-task-tracking` tracks visible progress from this run’s state and events. This is a
-visibility checkpoint, not an approval gate unless a material question remains.
+`large-task-tracking` tracks visible progress from this run’s state and events. Follow
+[user confirmation gates](user-confirmation.md): confirm once before the complete create workflow
+unless it is already explicitly authorized.
+Plan-only and its same-run continuation share that approval; stages and cases then run
+autonomously within the approved plan and budget. Diagnose recoverable problems and ask only
+when a material user decision, unavailable authorization or unapproved change requires it.
 
 5. Reuse the real refinement pipeline: independent test planning/review, original
    baseline, standards review, failure-driven repair, one full regression suite per
@@ -79,10 +84,13 @@ issues; rejected versions are preserved.
 The command-line pipeline records material business unknowns as
 `state.json.questions`, emits `needs_clarification`, and saves them in
 `business-analysis.md` and `report.md`. It does not itself open a chat prompt. The
-Skill host/orchestrator must relay those questions to the user through its native
-structured input facility when available, or ordinary conversation otherwise. Ask
-the fewest answerable questions that resolve the uncertainty; identify why each
-answer changes behavior and offer a recommended default when safe.
+Skill host/orchestrator first applies [user confirmation gates](user-confirmation.md).
+For an explicitly synthetic test or demo, select reasonable reversible example assumptions,
+record their source and rationale separately, and validate them as part of the frozen test
+contract; do not present them as user decisions. For consequential real-business unknowns
+or missing authorization, relay the fewest answerable questions through the host's native
+structured input facility when available, or ordinary conversation otherwise. Explain why
+each answer changes behavior and offer a recommended default when safe.
 
 Before asking for operational help, inspect `doctor` output, the run status, exit
 code, stderr/stdout, and relevant backend/configuration files. Classify the blocker
@@ -92,9 +100,12 @@ choice unblocks it. Ask for endpoint/provider/model names or a config file path 
 when needed. Never request credentials in chat; direct the user to configure them
 locally using the host's secret store or environment.
 
-After receiving an answer, preserve it in an additional UTF-8 clarification
-requirements file and start a fresh `create` invocation with the original inputs and
-the clarification file. Do not pass changed business inputs to `--resume-from`;
+After receiving an answer, or recording a permitted synthetic-example assumption,
+preserve it in a separately identified UTF-8 requirements file. Keep the original
+inputs unchanged. If the run qualifies for `import-create-inputs --supplement`, use
+its versioned migration to create and validate derived inputs while inheriting the
+consumed budget; otherwise start a new creation with both sources and explicitly
+account for prior consumption. Do not pass changed business inputs to `--resume-from`;
 resume is only for an unchanged approved contract and validated draft. Regenerate
 affected development and acceptance plans and execute fresh verification. If the
 user cannot answer or perform the local action, leave the run incomplete, preserve
@@ -137,6 +148,50 @@ business inputs, missing approvals or tampered artifacts are rejected. Reports
 record original artifact provenance and, when replaying after a controller upgrade,
 the original checker hash alongside the new run's checker hash. Old verdicts and
 locks remain untouched. A resumed invocation has its own explicit budget.
+
+If a controller upgrade prevents `--resume-run` and only the old `inputs` stage
+completed, `import-create-inputs` is an offline, explicit migration into a new,
+isolated workspace. Pass `--source-run`, `--controller-archive`, `--output`,
+the new `--config` and full execution options, and `--prior-seconds`,
+`--prior-agent-calls`, `--prior-evaluations`. Prior calls also require
+`--process-reconciliation` with a source-specific process check, historical
+termination evidence and its limitations. With an exact source archive, the command
+validates the old controller and schemas, copies verified inputs, records provenance
+and preserves prior consumption. It never marks analysis or later stages complete.
+When that exact archive is unavailable, omit `--controller-archive` and explicitly
+pass `--revalidate-source-checkpoint`; the current controller then revalidates the
+completed inputs stage and its file/schema hashes. This fallback records a v3
+migration attestation, treats every other stage as untrusted, and never reuses it as
+completed work. It currently supports only zero prior target evaluations and no
+original destination.
+Resume with `create --resume-run NEW_WORKSPACE` using the same backend, options
+and limits that were frozen during import; a different budget is rejected.
+The external process check can have gaps, such as unknown historical child PIDs;
+retain and report those limits instead of claiming stronger proof.
+
+When the unchanged input checkpoint has independently rejected analyses,
+`--carry-analysis-feedback` verifies and copies their original call evidence,
+including each request, response and analysis-to-review relationship. The new
+run keeps analysis incomplete, inherits all consumption and supplies the latest
+analysis plus complete prior reviews to the next revision. Each attempt and review
+has a new evidence path. Schema, semantic and independent-review gates still apply;
+the controller records a schema-validated revision delta and requires an independent
+explanation before approving coverage reductions. An identical previously rejected
+analysis stops as no progress. This option cannot be combined with `--supplement`:
+changed inputs require fresh analysis. A completed analysis without its independent
+review currently requires reconciliation rather than silently rerunning it.
+
+When the user has explicitly supplied a new business decision, append it during
+offline import with `--supplement PATH --supplement-source ORIGIN`. The file
+must contain the user's actual decision; never manufacture one or use a test
+fixture as a business answer. The v2 migration record binds the old input hash,
+the original input snapshot and artifact inventory, the supplement's original
+path and bytes, its decision source, and the newly derived input hash and full
+inventory. Existing requirements stay unchanged and in order. The derived inputs
+are a new input stage, not an assertion that the old checkpoint is unchanged;
+analysis and all downstream stages execute against the supplemented inputs.
+Neither this nor the v1 import supports a nonzero historical evaluation count;
+stop for explicit reconciliation instead of discarding that consumption.
 
 Category coverage is not exhaustive scenario coverage. Current executable checks
 cover deterministic text/JSON, files and command traces. External services, visual

@@ -4,6 +4,49 @@ This is the reusable authoring rule for every Skill created or refined by Skill 
 Skill Refiner itself. `schemas/` stores definitions; a run directory stores instances, results and hashes.
 Do not place the only copy of a schema in a run directory.
 
+## Assign each obligation to its owner
+
+Before turning a standard into a target Skill requirement or test case, classify it as a controller,
+target-runtime, or execution-runner obligation. Record the owner and why it applies in the analysis. The
+same standard can have different owners at different layers; its presence in the source material does
+not make every clause a new runtime feature of the target Skill.
+
+- **Controller:** Skill Refiner owns its plans, analyses, reviews, run state, recovery, validators and
+  lifecycle evidence. Keep these private controller obligations in Skill Refiner and its run directory;
+  do not copy them into a target Skill unless the target's own workflow actually uses them.
+- **Target runtime:** derive behavior from the target Skill's user-facing contract and actual workflow.
+  Package a schema for a structured output the target must produce. Include a target runtime validator
+  only when the target itself consumes or persists structured artifacts that need validation, or a
+  sourced requirement explicitly requires that runtime validator. The Refiner's test harness may
+  validate a response against the packaged output schema; testing a response alone does not require a
+  second validator implementation inside the target Skill.
+- **Execution runner:** the harness owns independent checks of the execution environment, including
+  tool/network restrictions, file and process observation, package inventory, and evidence capture.
+  Do not require the target Skill to build its own operating-system observer or prove the runner's
+  isolation. If the runner cannot observe a required property, keep that property blocked at the runner
+  gate and name the evidence gap.
+
+A consequential target workflow still needs a short, requirement-linked self-review before handoff or
+final response. The review is bounded to the frozen checklist and one targeted correction. Keep its
+record ephemeral when the target neither persists it nor hands it to another target stage. If a public
+response schema prohibits extra fields, never add the private review record to that response; retain
+review evidence in the host or Refiner run. Package a target schema and validator for the self-review
+record only when the target actually persists or hands off that record. Do not add target recovery APIs,
+resume behavior, persistent audit files, or generation/handoff/resume lifecycle stages to a transient
+conversation workflow that has no such artifacts. Do not represent ephemeral checks as artifact-producing
+stages.
+
+The plan may define assets that the target implementation is expected to create. Mark them as planned
+dependencies with concrete paths and post-implementation checks; do not require those future files to
+exist at the plan gate, and do not count them as implemented or passed until the final package contains
+them and the tests exercise them.
+
+Apply the standard with complete traceability and without duplicate tests: every applicable atomic
+criterion must map to a distinct observable check, but a single test may cover multiple criteria when
+its inputs and assertions prove each one independently. Do not exceed a frozen case budget to test
+controller-only obligations as target features. Reconcile a genuine coverage/capacity gap at the plan
+gate instead of asking the user to choose an implementation detail.
+
 ## Freeze a stage contract before execution
 
 The frozen plan uses `skill-refiner.skill-stage-contracts/v1`. For every stage that produces, persists or hands

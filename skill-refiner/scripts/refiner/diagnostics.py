@@ -7,7 +7,7 @@ from .profiles import load_config
 from .runtime import executable
 
 
-def inspect_config(path):
+def inspect_config(path, *, launch_context=None):
     config = load_config(path)
     rows = []
     profiles = [("agent:" + role, p) for role, p in config["agents"].items()]
@@ -16,6 +16,11 @@ def inspect_config(path):
         backend = profile["backend"]
         row = {"profile": role, "backend": backend, "model": profile.get("model", "local-default"),
                "ready": True, "verification": "not_live_tested"}
+        row["declared_settings"] = {key: profile[key] for key in
+                                    ("model", "reasoning_effort", "timeout", "codex_sandbox") if key in profile}
+        row["effective_configuration"] = "not_resolved"
+        row["unresolved_inherited_fields"] = [key for key in ("model", "reasoning_effort")
+                                               if backend in {"codex", "codex_subagent"} and not profile.get(key)]
         try:
             if backend == "openai_compatible":
                 key = profile.get("api_key_env")
@@ -47,5 +52,7 @@ def inspect_config(path):
         except Exception as exc:
             row.update(ready=False, error=str(exc))
         rows.append(row)
+    from .preflight import _configuration_origin
     return {"ready": all(r["ready"] for r in rows), "profiles": rows,
+            "configuration_origin": _configuration_origin(launch_context),
             "note": "Availability checks do not prove model execution or Skill compatibility"}

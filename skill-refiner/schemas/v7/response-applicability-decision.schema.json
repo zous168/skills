@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.response-applicability-decision/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "inputs_sha256",
+    "plan_sha256",
+    "sources",
+    "analysis",
+    "independent_review",
+    "analysis_schema_sha256",
+    "call_evidence",
+    "decision_schema_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "skill-refiner.response-applicability-decision/v1"
+    },
+    "inputs_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "plan_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "analysis": {
+      "type": "object"
+    },
+    "independent_review": {
+      "type": "object"
+    },
+    "analysis_schema_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "call_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "analysis",
+        "independent_review"
+      ],
+      "properties": {
+        "analysis": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "call_dir",
+            "request",
+            "manifest",
+            "execution"
+          ],
+          "properties": {
+            "call_dir": {
+              "type": "string",
+              "pattern": "^[0-9]+-(?:analysis-review|plan-review)$"
+            },
+            "request": {
+              "type": "object"
+            },
+            "manifest": {
+              "type": "object"
+            },
+            "execution": {
+              "type": "object"
+            }
+          }
+        },
+        "independent_review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "call_dir",
+            "request",
+            "manifest",
+            "execution"
+          ],
+          "properties": {
+            "call_dir": {
+              "type": "string",
+              "pattern": "^[0-9]+-(?:analysis-review|plan-review)$"
+            },
+            "request": {
+              "type": "object"
+            },
+            "manifest": {
+              "type": "object"
+            },
+            "execution": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "decision_schema_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

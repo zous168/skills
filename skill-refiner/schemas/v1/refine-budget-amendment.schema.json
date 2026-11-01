@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.refine-budget-amendment/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_run", "source_contract_sha256", "source_plan_sha256",
+               "source_control_sha256", "capacity_gap", "capacity_assessment", "old_max_cases", "new_max_cases",
+               "old_max_evaluations", "new_max_evaluations", "acceptance_cases", "executor_count",
+               "max_rounds", "known_native_cases", "known_worst_case_evaluations", "zero_evaluation_lineage", "usage"],
+  "properties": {
+    "schema_version": {"const": "skill-refiner.refine-budget-amendment/v1"},
+    "source_run": {"type": "string", "minLength": 1},
+    "source_contract_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "source_plan_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "source_control_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "capacity_gap": {"type": "string", "minLength": 1},
+    "capacity_assessment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "decision_by", "verdict", "source_plan_sha256",
+                   "source_control_sha256", "gap_index", "gap_quote", "rationale", "authorized_limits"],
+      "properties": {
+        "schema_version": {"const": "skill-refiner.refine-capacity-assessment/v1"},
+        "decision_by": {"const": "main_agent"},
+        "verdict": {"const": "coverage_capacity_unproven"},
+        "source_plan_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "source_control_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "gap_index": {"type": "integer", "minimum": 0},
+        "gap_quote": {"type": "string", "minLength": 1},
+        "rationale": {"type": "string", "minLength": 12},
+        "authorized_limits": {
+          "type": "object", "additionalProperties": false,
+          "required": ["max_cases", "acceptance_cases", "max_evaluations"],
+          "properties": {
+            "max_cases": {"type": "integer", "minimum": 2, "maximum": 24},
+            "acceptance_cases": {"type": "integer", "minimum": 2},
+            "max_evaluations": {"type": "integer", "minimum": 1, "maximum": 200}
+          }
+        }
+      }
+    },
+    "old_max_cases": {"type": "integer", "minimum": 2},
+    "new_max_cases": {"type": "integer", "minimum": 2, "maximum": 24},
+    "old_max_evaluations": {"type": "integer", "minimum": 0},
+    "new_max_evaluations": {"type": "integer", "minimum": 0, "maximum": 200},
+    "acceptance_cases": {"type": "integer", "minimum": 2},
+    "executor_count": {"const": 1},
+    "max_rounds": {"const": 2},
+    "known_native_cases": {"const": 0},
+    "known_worst_case_evaluations": {"type": "integer", "minimum": 1},
+    "zero_evaluation_lineage": {
+      "type": "array", "minItems": 2,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["path", "sha256", "target_evaluations"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "target_evaluations": {"type": "integer", "const": 0}
+        }
+      }
+    },
+    "usage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["agent_calls", "elapsed_seconds", "target_evaluations"],
+      "properties": {
+        "agent_calls": {"type": "integer", "minimum": 0},
+        "elapsed_seconds": {"type": "number", "minimum": 0},
+        "target_evaluations": {"const": 0}
+      }
+    }
+  }
+}

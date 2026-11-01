@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.checkpoint-migration",
+  "x-schema-version": "v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "workspace", "source_run", "controller_archive", "source_controller_sha256", "source_manifest_sha256", "source_contract_sha256", "source_state_sha256", "process_reconciliation_sha256", "inputs_sha256", "artifacts", "inherited", "execution_sha256", "options", "limits"],
+  "properties": {
+    "schema_version": {"const": "skill-refiner.checkpoint-migration/v1"},
+    "workspace": {"type": "string", "minLength": 1},
+    "source_run": {"type": "string", "minLength": 1},
+    "controller_archive": {"type": "string", "minLength": 1},
+    "source_controller_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "source_manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "source_contract_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "source_state_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "process_reconciliation_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "inputs_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "artifacts": {"type": "object", "minProperties": 2, "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}},
+    "inherited": {"type": "object", "additionalProperties": false, "required": ["seconds", "agent_calls", "evaluations"], "properties": {"seconds": {"type": "number", "minimum": 0}, "agent_calls": {"type": "integer", "minimum": 0}, "evaluations": {"const": 0}}},
+    "execution_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "options": {"type": "object"},
+    "limits": {"type": "object"}
+  }
+}

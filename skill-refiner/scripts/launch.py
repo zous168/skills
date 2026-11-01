@@ -29,6 +29,9 @@ def main():
     args = sys.argv[1:]
     command = args[0] if args else None
     supplied = {arg.split("=", 1)[0] for arg in args[1:] if arg.startswith("--")}
+    launch_context = {"launch_manifest_path": str(settings),
+                      "configured_defaults": dict(runtime.get("limits", {})),
+                      "applied_defaults": {}, "explicit_flags": sorted(supplied)}
     legacy = {"--engine", "--engine-config", "--agent-command"}
     if command in {"run", "create", "compare", "doctor"} and not supplied.intersection(legacy | {"--config"}):
         args += ["--config", str(config)]
@@ -41,10 +44,13 @@ def main():
             flag = "--" + name.replace("_", "-")
             if flag not in supplied:
                 args += [flag, str(value)]
+                launch_context["applied_defaults"][name] = value
     if command == "bootstrap" and "--directory" not in supplied:
         args += ["--directory", str(skill / ".runtime" / "bin")]
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # Informational provenance only: the CLI still validates all actual flags.
+    env["SKILL_REFINER_LAUNCH_CONTEXT"] = json.dumps(launch_context, ensure_ascii=False)
     # User profiles contain explicit CLI paths. Also support the legacy doctor's
     # PATH lookup without requiring shell initialization or changing global PATH.
     env["PATH"] = os.pathsep.join([*runtime.get("path_entries", []), str(skill_up.parent),

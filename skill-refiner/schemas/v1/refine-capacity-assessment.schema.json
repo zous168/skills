@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.refine-capacity-assessment/v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "decision_by", "verdict", "source_plan_sha256",
+               "source_control_sha256", "gap_index", "gap_quote", "rationale", "authorized_limits"],
+  "properties": {
+    "schema_version": {"const": "skill-refiner.refine-capacity-assessment/v1"},
+    "decision_by": {"const": "main_agent"},
+    "verdict": {"const": "coverage_capacity_unproven"},
+    "source_plan_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "source_control_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "gap_index": {"type": "integer", "minimum": 0},
+    "gap_quote": {"type": "string", "minLength": 1},
+    "rationale": {"type": "string", "minLength": 12},
+    "authorized_limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_cases", "acceptance_cases", "max_evaluations"],
+      "properties": {
+        "max_cases": {"type": "integer", "minimum": 2, "maximum": 24},
+        "acceptance_cases": {"type": "integer", "minimum": 2},
+        "max_evaluations": {"type": "integer", "minimum": 1, "maximum": 200}
+      }
+    }
+  }
+}

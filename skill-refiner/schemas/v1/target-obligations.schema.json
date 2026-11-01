@@ -1,0 +1,237 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "sources",
+    "obligations",
+    "coverage_gaps"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "skill-refiner.target-obligations/v1"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_id",
+          "content_sha256",
+          "obligation_ids"
+        ],
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "pattern": "^standard-[1-9][0-9]*$"
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "obligation_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "obligations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "subject",
+          "applicable",
+          "applicability_reason",
+          "behavior",
+          "source",
+          "acceptance_criteria",
+          "scenario_ids",
+          "workflow_ids",
+          "mechanism"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^O-[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "subject": {
+            "enum": [
+              "target",
+              "controller"
+            ]
+          },
+          "applicable": {
+            "type": "boolean"
+          },
+          "applicability_reason": {
+            "type": "string",
+            "minLength": 8
+          },
+          "behavior": {
+            "type": "string",
+            "minLength": 8
+          },
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source_id",
+              "content_sha256",
+              "quote"
+            ],
+            "properties": {
+              "source_id": {
+                "type": "string",
+                "pattern": "^standard-[1-9][0-9]*$"
+              },
+              "content_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "quote": {
+                "type": "string",
+                "minLength": 8
+              }
+            }
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "minItems": 0,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "statement",
+                "evidence"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "statement": {
+                  "type": "string",
+                  "minLength": 8
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 8
+                }
+              }
+            }
+          },
+          "scenario_ids": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "workflow_ids": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "mechanism": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "state",
+              "interface",
+              "evidence_strategy",
+              "gap_ids"
+            ],
+            "properties": {
+              "state": {
+                "enum": [
+                  "planned",
+                  "blocked",
+                  "not_applicable"
+                ]
+              },
+              "interface": {
+                "type": "string",
+                "minLength": 8
+              },
+              "evidence_strategy": {
+                "type": "string",
+                "minLength": 8
+              },
+              "gap_ids": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "coverage_gaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "obligation_ids",
+          "scenario_ids",
+          "reason",
+          "required_evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "obligation_ids": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "scenario_ids": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 8
+          },
+          "required_evidence": {
+            "type": "string",
+            "minLength": 8
+          }
+        }
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.target-obligations",
+  "x-schema-version": "v1"
+}

@@ -15,6 +15,13 @@ PROJECT_MARKERS = (
     "setup.cfg", "PROJECT-STANDARDS.md", ".skill-refiner/standards",
 )
 
+HOST_SUBAGENT_TEST_RULES = (
+    "When the orchestration host exposes subagent scheduling, prefer host subagents for test execution and create one bounded assignment per frozen development or acceptance case.",
+    "Record the responsible Agent, case and requirement IDs, fixture/oracle references, expected outcome and assertion IDs, isolated scope, unique evidence path, limits, and join gate in the schema-validated execution_plan. A tester returns the case ID, PASS/FAIL/ERROR/NOT_RUN, each assertion's expected and actual result, evidence references, and gaps; it does not edit frozen plans/oracles, the target Skill, shared run state, or the parent GoalExecutor snapshot.",
+    "The main controller owns result synthesis, repairs, phase gates, and shared progress. When large-task-tracking is active, mirror each case as a separate task and update it only from that case's evidence. Schedule case assignments serially by default; parallelize only with actual host support, separate fixtures/workspaces/evidence paths, and no shared runner or judge state. Same-executor skill-up cases remain serial while its script judge uses shared temporary directories.",
+    "If host scheduling is unavailable or the executor only accepts a whole suite, state that exact fallback and preserve an independent status and evidence record for every case. The controller's max_parallel_agents is not proof that a host subagent ran.",
+)
+
 
 def _project_chain(start):
     """Return directories from the project boundary through start, root first."""

@@ -85,6 +85,25 @@ def parse_json_sequence(text):
     return values
 
 
+def json_values_equal(left, right):
+    """Compare JSON values without treating booleans as numbers.
+
+    JSON has one numeric category: 1 and 1.0 compare equal, including inside
+    arrays or objects, while true/false never equal 1/0. Array order is significant.
+    """
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is bool and type(right) is bool and left is right
+    if isinstance(left, (int, float)) or isinstance(right, (int, float)):
+        return (isinstance(left, (int, float)) and isinstance(right, (int, float))
+                and left == right)
+    if isinstance(left, dict) or isinstance(right, dict):
+        return (isinstance(left, dict) and isinstance(right, dict) and left.keys() == right.keys()
+                and all(json_values_equal(value, right[key]) for key, value in left.items()))
+    if isinstance(left, list) or isinstance(right, list):
+        return (isinstance(left, list) and isinstance(right, list) and len(left) == len(right)
+                and all(json_values_equal(a, b) for a, b in zip(left, right)))
+    return type(left) is type(right) and left == right
+
 def json_pointer_tokens(pointer):
     if pointer == "":
         return []
@@ -138,7 +157,7 @@ def json_path_matches_file_pointer(check):
     return file_pointer
 
 
-def check_one(check, response, root, transcript=None):
+def check_one(check, response, root, transcript=None, *, synthetic_control=False):
     kind, expected = check["type"], check["value"]
     actual = response
     try:
@@ -149,12 +168,32 @@ def check_one(check, response, root, transcript=None):
                     return False, "Execution transcript unavailable; cannot prove command execution"
                 transcript = json.loads(Path(transcript_path).read_text(encoding="utf-8"))
             commands, tool_names, matched_ids, matched_order, results = [], [], set(), [], {}
+            native_observations = []
+            command_exit_evidence = []
 
             def visit(value):
                 if isinstance(value, list):
                     for entry in value:
                         visit(entry)
                 elif isinstance(value, dict):
+                    if value.get("role") == "system" and isinstance(value.get("content"), str):
+                        content = value["content"]
+                        if "skill_refiner_native_observation" in content:
+                            try:
+                                observation = json.loads(content)["skill_refiner_native_observation"]
+                                if not isinstance(observation, dict):
+                                    raise ValueError("native observation is not an object")
+                            except (ValueError, KeyError, TypeError):
+                                observation = {"status": "incomplete"}
+                            native_observations.append(observation)
+                        if "skill_refiner_command_exit_evidence" in content:
+                            try:
+                                record = json.loads(content)["skill_refiner_command_exit_evidence"]
+                                if not isinstance(record, dict):
+                                    raise ValueError("command exit evidence is not an object")
+                            except (ValueError, KeyError, TypeError):
+                                record = {"status": "incomplete"}
+                            command_exit_evidence.append(record)
                     if value.get("role") == "tool_call":
                         call = value.get("tool_call", {})
                         tool_name = call.get("name", "")
@@ -194,17 +233,57 @@ def check_one(check, response, root, transcript=None):
                         if key not in {"content", "arguments"}:
                             visit(entry)
             visit(transcript)
+            def absence_coverage_error():
+                if not native_observations:
+                    if synthetic_control:
+                        return None
+                    return ("Tool observation is unavailable; cannot prove absence of external calls or side effects; "
+                            "a coverage gap must be recorded")
+                for observation in native_observations:
+                    if (observation.get("status") != "complete" or observation.get("unclassified_tools") != []
+                            or observation.get("absence_of_external_calls_proven") is not True
+                            or observation.get("absence_of_side_effects_proven") is not True):
+                        return ("Native tool observation does not establish absence of external calls or side effects; "
+                                "unknown tools, incomplete capture, or unobserved process effects require a coverage gap")
+                return None
             if kind == "tool_command":
                 return bool(matched_ids), f"Observed tool commands: {commands!r}"
             if kind == "tool_command_absent":
+                if not matched_ids and (coverage_error := absence_coverage_error()):
+                    return False, coverage_error
                 return not matched_ids, ("No observed tool command matched the forbidden pattern"
                                          if not matched_ids else
                                          f"Forbidden tool commands were observed: {commands!r}")
             if kind == "tool_call_absent":
+                if not matched_ids and (coverage_error := absence_coverage_error()):
+                    return False, coverage_error
                 return not matched_ids, ("No observed tool call name matched the forbidden pattern"
                                          if not matched_ids else
                                          f"Forbidden tool calls were observed: {tool_names!r}")
             expected_exit_code = check.get("expected_exit_code")
+            if expected_exit_code is not None:
+                import hashlib
+                observed_exit_codes = {}
+                for record in command_exit_evidence:
+                    if (record.get("producer") != "skill-refiner.runtime"
+                            or record.get("schema_version") != "skill-refiner.command-exit-evidence/v1"
+                            or record.get("status") != "complete" or not isinstance(record.get("results"), dict)):
+                        return False, "Runtime command exit evidence is incomplete or conflicting"
+                    for call_id, evidence in record["results"].items():
+                        result = results.get(call_id)
+                        if not isinstance(evidence, dict) or not isinstance(result, dict):
+                            continue
+                        code, content = evidence.get("exit_code"), result.get("content")
+                        if (type(code) is not int or not isinstance(content, str)
+                                or evidence.get("status") != ("success" if code == 0 else "error")
+                                or result.get("status") != evidence["status"]
+                                or hashlib.sha256(content.encode("utf-8")).hexdigest() != evidence.get("content_sha256")):
+                            return False, "Runtime command exit evidence does not match the observed tool result"
+                        if ((call_id in observed_exit_codes and observed_exit_codes[call_id] != code)
+                                or (result.get("exit_code") is not None and result["exit_code"] != code)):
+                            return False, "Runtime command exit evidence conflicts with another observed exit code"
+                        observed_exit_codes[call_id] = code
+                        results[call_id] = {**result, "exit_code": code}
             matching_results = []
             for call_id in matched_order:
                 result = results.get(call_id)
@@ -238,7 +317,7 @@ def check_one(check, response, root, transcript=None):
                         # Shell tools may include a preceding input-file dump. The
                         # final structured output must still be the forwarded value.
                         output_json = candidates[-1]
-                    if actual_json == output_json:
+                    if json_values_equal(actual_json, output_json):
                         return True, (f"Final JSON equals matching tool output with exit code {expected_exit_code}"
                                       if expected_exit_code is not None else
                                       "Final JSON equals successful matching tool output")
@@ -250,14 +329,14 @@ def check_one(check, response, root, transcript=None):
             # require an invented newline between complete business outputs.
             for output in matching_outputs:
                 try:
-                    if parse_json_sequence(response) and parse_json_sequence(response) == parse_json_sequence(output):
+                    if parse_json_sequence(response) and json_values_equal(parse_json_sequence(response), parse_json_sequence(output)):
                         return True, 'Final JSON stream equals successful matching tool output'
                 except ValueError:
                     pass
             if len(matching_outputs) == len(matched_order) and matching_outputs:
                 try:
                     actual_values = [value for output in matching_outputs for value in parse_json_sequence(output)]
-                    if parse_json_sequence(response) and parse_json_sequence(response) == actual_values:
+                    if parse_json_sequence(response) and json_values_equal(parse_json_sequence(response), actual_values):
                         return True, 'Final JSON stream equals all ordered complete matching outputs'
                 except ValueError:
                     pass
@@ -298,20 +377,20 @@ def check_one(check, response, root, transcript=None):
             passed = actual.strip() == str(expected).strip()
         elif kind == 'json_sequence_equal':
             values = parse_json_sequence(actual)
-            passed = isinstance(expected, list) and values == expected
+            passed = isinstance(expected, list) and json_values_equal(values, expected)
             actual = values
         elif kind == "json_path_matches_file":
             response_value = json_pointer_get(parse_json_output(actual), check["pointer"])
             observed = json.loads(relative_path(root, check["path"]).read_text(encoding="utf-8"))
             source_pointer = json_path_matches_file_pointer(check)
             file_value = json_pointer_get(observed, source_pointer)
-            passed = response_value == file_value
+            passed = json_values_equal(response_value, file_value)
             actual = {"response": response_value, "file": file_value}
         elif kind in {"json_equal", "file_json_equal", "json_path_equal", "file_json_path_equal"}:
             actual = parse_json_output(actual)
             if kind in {"json_path_equal", "file_json_path_equal"}:
                 actual = json_pointer_get(actual, check.get("pointer", ""))
-            passed = actual == expected
+            passed = json_values_equal(actual, expected)
         else:
             raise RefinerError(f"Unknown checker: {kind}")
         return passed, f"{kind}: expected={expected!r}; actual={str(actual)[:1500]!r}"
@@ -319,12 +398,12 @@ def check_one(check, response, root, transcript=None):
         return False, f"{kind}: {exc}"
 
 
-def assertion_diagnostic(check, response, root, *, passed=None, transcript=None):
+def assertion_diagnostic(check, response, root, *, passed=None, transcript=None, synthetic_control=False):
     """Return a stable, field-level result for reports and plan-control failures."""
     if passed is None:
-        passed, evidence = check_one(check, response, root, transcript)
+        passed, evidence = check_one(check, response, root, transcript, synthetic_control=synthetic_control)
     else:
-        _, evidence = check_one(check, response, root, transcript)
+        _, evidence = check_one(check, response, root, transcript, synthetic_control=synthetic_control)
     kind = check["type"]
     pointer = check.get("pointer")
     path = check.get("path")
@@ -372,31 +451,81 @@ def assertion_diagnostic(check, response, root, *, passed=None, transcript=None)
             "passed": bool(passed), "evidence": evidence}
 
 
+def _case_response_contract(case):
+    """Deterministically freeze the case recipe preserved in the plan/oracle."""
+    from .response_contract import freeze_response_contract
+    recipe = case.get("response_contract")
+    if recipe is None:
+        return None
+    return freeze_response_contract(recipe["schema_json"], recipe["source_refs"],
+                                    allow_markdown_fence=recipe["allow_markdown_fence"])
+
+
 def grade(case, response, root):
     assertions = []
+    status = None
     for check in case["checks"]:
         result = assertion_diagnostic(check, response, root)
         assertions.append({"check": check, **result})
-    return {"case_id": case["id"], "passed": all(a["passed"] for a in assertions), "assertions": assertions}
+    if case.get("response_contract") is not None:
+        from .response_contract import ResponseContractError, validate_response
+        try:
+            contract = _case_response_contract(case)
+            outcome = validate_response(contract, response)
+            status = outcome["status"]
+            assertions.append({"check": {"id": "response_contract", "type": "json_schema"},
+                               "assertion_id": "response_contract", "field_path": "response",
+                               "expected_condition": {"schema_sha256": contract["schema_sha256"],
+                                                      "contract_sha256": contract["contract_sha256"]},
+                               "actual_value": outcome["errors"], "passed": status == "pass",
+                               "evidence": "Frozen response contract: " + status})
+        except (ResponseContractError, KeyError, TypeError, ValueError) as exc:
+            status = "error"
+            assertions.append({"check": {"id": "response_contract", "type": "json_schema"},
+                               "assertion_id": "response_contract", "field_path": "response",
+                               "expected_condition": "valid frozen response contract",
+                               "actual_value": type(exc).__name__, "passed": False,
+                               "evidence": "Response contract validation error"})
+    result = {"case_id": case["id"], "passed": all(a["passed"] for a in assertions),
+              "assertions": assertions}
+    if status == "error":
+        result["status"] = "ERROR"
+    return result
 
 
 def validate_plan(plan, root, max_cases=8, *, required_case_kinds=None,
                   required_scenario_ids=None, expected_scenarios=None, expected_requirements=None,
-                  expected_execution_plan=None):
+                  expected_execution_plan=None, verified_response_sources=None,
+                  required_response_contract_cases=None):
     """Validate real coverage, oracle paths and discriminating output assertions."""
-    from .schemas import PLAN, PLAN_V2, PLAN_V3, PLAN_V4, PLAN_V5
+    from .schemas import PLAN, PLAN_V2, PLAN_V3, PLAN_V4, PLAN_V5, PLAN_V6, PLAN_V7, PLAN_V8
     import jsonschema
     plan_version = plan.get("schema_version")
     legacy = plan_version == "skill-refiner.plan/v2"
     plan_schema = {"skill-refiner.plan/v2": PLAN_V2, "skill-refiner.plan/v3": PLAN_V3,
-                   "skill-refiner.plan/v4": PLAN_V4, "skill-refiner.plan/v5": PLAN_V5}.get(plan_version, PLAN)
+                   "skill-refiner.plan/v4": PLAN_V4, "skill-refiner.plan/v5": PLAN_V5,
+                   "skill-refiner.plan/v6": PLAN_V6, "skill-refiner.plan/v7": PLAN_V7,
+                   "skill-refiner.plan/v8": PLAN_V8}.get(plan_version, PLAN)
     jsonschema.validate(plan, plan_schema)
-    if plan_version in {"skill-refiner.plan/v4", "skill-refiner.plan/v5"}:
+    if plan_version in {"skill-refiner.plan/v7", "skill-refiner.plan/v8"}:
+        if not isinstance(required_response_contract_cases, (list, tuple, set)):
+            raise RefinerError("Response contract applicability was not authenticated")
+        required_contract_ids = set(required_response_contract_cases)
+        if not required_contract_ids <= {case["id"] for case in plan["cases"]}:
+            raise RefinerError("Response contract applicability references unknown cases")
+        missing_contract_ids = sorted(case["id"] for case in plan["cases"]
+                                      if case["id"] in required_contract_ids and case["response_contract"] is None)
+        if missing_contract_ids:
+            raise RefinerError("Required JSON response contract missing for cases: " + ", ".join(missing_contract_ids))
+    if plan_version in {"skill-refiner.plan/v4", "skill-refiner.plan/v5", "skill-refiner.plan/v6", "skill-refiner.plan/v7", "skill-refiner.plan/v8"}:
         validate_skill_stage_contracts(plan["stage_contracts"], {row["id"] for row in plan["requirements"]})
-    if plan_version == "skill-refiner.plan/v5":
+    if plan_version in {"skill-refiner.plan/v5", "skill-refiner.plan/v6", "skill-refiner.plan/v7", "skill-refiner.plan/v8"}:
         validate_execution_plan(plan["execution_plan"], plan)
         if expected_execution_plan is not None and plan["execution_plan"] != expected_execution_plan:
             raise RefinerError("Independent plan changed the frozen schema-validated execution_plan")
+    if plan_version == "skill-refiner.plan/v8":
+        from .planned_dependencies import validate_planned_dependencies
+        validate_planned_dependencies(plan, verified_response_sources)
     if len(plan["cases"]) > max_cases:
         raise RefinerError(f"Plan exceeds {max_cases} cases")
     # Exact status/state labels are especially easy to invent when an agent
@@ -551,7 +680,25 @@ def validate_plan(plan, root, max_cases=8, *, required_case_kinds=None,
                     or Path(name).name in {"AGENTS.md", "CLAUDE.md", ".cursorrules", ".mcp.json"}
                     or name.endswith("SKILL.md")):
                 raise RefinerError(f"Fixture cannot inject Skill instructions or oracles: {name}")
+        case_contract = None
+        source_bindings = {}
+        if plan_version in {"skill-refiner.plan/v7", "skill-refiner.plan/v8"} and case["response_contract"] is not None:
+            from .response_contract import ResponseContractError
+            if not isinstance(verified_response_sources, dict):
+                raise RefinerError("Response contract source evidence has not been verified")
+            refs = case["response_contract"]["source_refs"]
+            for ref in refs:
+                source_hash = verified_response_sources.get(ref)
+                if not isinstance(source_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", source_hash):
+                    raise RefinerError("Response contract source is missing or unauthenticated: " + ref)
+                source_bindings[ref] = source_hash
+            try:
+                case_contract = _case_response_contract(case)
+            except (ResponseContractError, KeyError, TypeError, ValueError) as exc:
+                raise RefinerError("Response contract is unsupported or invalid") from exc
         assertion_ids = [check["id"] for check in case["checks"]]
+        if plan_version in {"skill-refiner.plan/v7", "skill-refiner.plan/v8"} and "response_contract" in assertion_ids:
+            raise RefinerError("response_contract is reserved for the frozen contract assertion")
         if len(assertion_ids) != len(set(assertion_ids)):
             raise RefinerError(f"Duplicate assertion id in case {case['id']}: {assertion_ids}")
         positive_controls = case["positive_controls"]
@@ -571,9 +718,12 @@ def validate_plan(plan, root, max_cases=8, *, required_case_kinds=None,
             raise RefinerError(f"Canonical positive control mismatch: {case['id']}")
         if case["bad_response"] not in {control["response"] for control in negative_controls}:
             raise RefinerError(f"Canonical bad_response must be one of the negative controls: {case['id']}")
-        if case.get("good_responses") and case["good_responses"] != [
-                control["response"] for control in positive_controls[1:]]:
-            raise RefinerError(f"Legacy good_responses do not match positive_controls: {case['id']}")
+        if "good_responses" in case:
+            responses = [control["response"] for control in positive_controls]
+            # Both complete and canonical-excluded forms describe the same
+            # positives; every positive control is still evaluated.
+            if case["good_responses"] not in (responses, responses[1:]):
+                raise RefinerError(f"Legacy good_responses do not match positive_controls: {case['id']}")
         for check in case["checks"]:
             if (check["type"] == "json_path_equal"
                     and check.get("pointer", "").rsplit("/", 1)[-1].lower() in {"status", "state"}
@@ -662,6 +812,15 @@ def validate_plan(plan, root, max_cases=8, *, required_case_kinds=None,
                     path.write_text(json.dumps(observed), encoding="utf-8")
 
             control_results = []
+            def response_contract_result(response):
+                if case_contract is None:
+                    return None
+                from .response_contract import ResponseContractError, validate_response
+                try:
+                    return validate_response(case_contract, response)
+                except (ResponseContractError, ValueError, TypeError) as exc:
+                    raise RefinerError("Response contract validation could not complete") from exc
+
             for control in positive_controls:
                 setup_error = None
                 try:
@@ -673,9 +832,15 @@ def validate_plan(plan, root, max_cases=8, *, required_case_kinds=None,
                     setup_error = f"{type(exc).__name__}: {exc}"
                     results = [assertion_diagnostic(check, control["response"], root)
                                for check in response_checks]
+                contract_result = response_contract_result(control["response"])
                 control_results.append({"control_id": control["id"], "polarity": "positive",
-                                        "assertions": results})
+                                        "assertions": results,
+                                        **({"response_contract": contract_result} if contract_result else {})})
                 failures = [row for row in results if not row["passed"]]
+                if contract_result and contract_result["status"] != "pass":
+                    failures.append({"assertion_id": "response_contract", "field_path": "response",
+                                     "expected_condition": "passes the frozen response contract",
+                                     "actual_value": contract_result})
                 if failures or setup_error:
                     control_failures.append({
                         "case_id": case["id"], "control_id": control["id"],
@@ -683,16 +848,28 @@ def validate_plan(plan, root, max_cases=8, *, required_case_kinds=None,
                         "actual_value": failures, "setup_error": setup_error})
 
             semantic_ids = {check["id"] for check in response_checks}
+            required_targets = semantic_ids | ({"response_contract"} if case_contract else set())
             targeted_ids = {control["assertion_id"] for control in negative_controls}
-            unknown_targets = sorted(targeted_ids - semantic_ids)
-            uncovered_assertions = sorted(semantic_ids - targeted_ids)
+            unknown_targets = sorted(targeted_ids - required_targets)
+            uncovered_assertions = sorted(required_targets - targeted_ids)
             if unknown_targets or uncovered_assertions:
                 control_failures.append({
                     "case_id": case["id"], "field_path": "negative_controls[].assertion_id",
-                    "expected_condition": {"targets_exactly": sorted(semantic_ids)},
+                    "expected_condition": {"targets_exactly": sorted(required_targets)},
                     "actual_value": {"unknown_targets": unknown_targets,
                                      "assertions_without_negative_control": uncovered_assertions}})
             for control in negative_controls:
+                if case_contract and control["assertion_id"] == "response_contract":
+                    contract_result = response_contract_result(control["response"])
+                    control_results.append({"control_id": control["id"], "polarity": "negative",
+                                            "target_assertion_id": "response_contract",
+                                            "assertions": [], "response_contract": contract_result})
+                    if contract_result["status"] != "fail":
+                        control_failures.append({"case_id": case["id"], "control_id": control["id"],
+                            "target_assertion_id": "response_contract", "field_path": "response",
+                            "expected_condition": "contract rejects the response",
+                            "actual_value": contract_result})
+                    continue
                 setup_error = None
                 try:
                     with tempfile.TemporaryDirectory() as temp_root:
@@ -705,9 +882,16 @@ def validate_plan(plan, root, max_cases=8, *, required_case_kinds=None,
                                for check in response_checks]
                 actual_failures = {row["assertion_id"] for row in results if not row["passed"]}
                 expected_failures = {control["assertion_id"]}
+                contract_result = response_contract_result(control["response"])
                 control_results.append({"control_id": control["id"], "polarity": "negative",
                                         "target_assertion_id": control["assertion_id"],
-                                        "assertions": results})
+                                        "assertions": results,
+                                        **({"response_contract": contract_result} if contract_result else {})})
+                if contract_result and contract_result["status"] != "pass":
+                    control_failures.append({"case_id": case["id"], "control_id": control["id"],
+                        "target_assertion_id": control["assertion_id"], "field_path": "response",
+                        "expected_condition": "semantic negative must satisfy the response contract",
+                        "actual_value": contract_result})
                 if actual_failures != expected_failures:
                     control_failures.append({
                         "case_id": case["id"], "control_id": control["id"],
@@ -721,9 +905,9 @@ def validate_plan(plan, root, max_cases=8, *, required_case_kinds=None,
         auxiliary_results = []
 
         def check_auxiliary(control_id, check, response, check_root, transcript, expected_pass):
-            observed, _ = check_one(check, response, check_root, transcript)
+            observed, _ = check_one(check, response, check_root, transcript, synthetic_control=True)
             result = assertion_diagnostic(check, response, check_root,
-                                          passed=observed, transcript=transcript)
+                                          passed=observed, transcript=transcript, synthetic_control=True)
             auxiliary_results.append({"control_id": control_id, "polarity": "auxiliary",
                                       "assertions": [result]})
             if observed != expected_pass:
@@ -805,7 +989,9 @@ def validate_plan(plan, root, max_cases=8, *, required_case_kinds=None,
                 p.unlink()
                 check_auxiliary("negative-missing-file", check, "", control_root, None, False)
         control_evidence.append({"case_id": case["id"], "controls": control_results,
-                                 "auxiliary_assertions": auxiliary_results})
+                                 "auxiliary_assertions": auxiliary_results,
+                                 **({"response_contract_sha256": case_contract["contract_sha256"],
+                                     "source_content_sha256": source_bindings} if case_contract else {})})
     uncovered = [r["id"] for r in plan["requirements"] if r["required"] and r["id"] not in covered]
     kinds = {c["kind"] for c in plan["cases"]}
     coverage_failures = list(asset_audit_failures)
@@ -1015,10 +1201,19 @@ def validate_skill_stage_contracts(contract, requirement_ids):
                            + ", ".join(f"{schema_id}@{version}" for schema_id, version in unused))
 
 
-def grader_main(case_path):
-    from .common import read_json
-    case = read_json(case_path)
-    result = grade(case, os.environ.get("EVAL_FINAL_MESSAGE", ""), Path.cwd())
+def grader_main(case_path, expected_sha256=None, expected_case_id=None):
+    import hashlib
+    try:
+        raw = Path(case_path).read_bytes()
+        if expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256:
+            raise RefinerError("Frozen oracle hash mismatch")
+        case = json.loads(raw.decode("utf-8"))
+        if expected_case_id is not None and case.get("id") != expected_case_id:
+            raise RefinerError("Frozen oracle case identity mismatch")
+        result = grade(case, os.environ.get("EVAL_FINAL_MESSAGE", ""), Path.cwd())
+    except (OSError, ValueError, TypeError, RefinerError):
+        result = {"case_id": expected_case_id, "status": "ERROR", "passed": False,
+                  "error": "Frozen oracle or response contract could not be validated"}
     print(json.dumps(result, ensure_ascii=False))
-    return 0 if result["passed"] else 1
+    return 2 if result.get("status") == "ERROR" else (0 if result["passed"] else 1)
 

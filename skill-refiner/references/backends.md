@@ -73,12 +73,25 @@ Codex supports `reasoning_effort`; native delegation additionally supports
 setting depend on the installed CLI/account; verify the resulting child records.
 Codex profiles may set `codex_sandbox` to `read-only`, `workspace-write` or
 `danger-full-access`; executor profiles default to `workspace-write`, while planning
-calls always use `read-only`. Use `danger-full-access` only for a trusted local test
-that needs to bind a loopback fake service, and only when live-service credentials
-are absent from the environment.
+calls always use `read-only`. Managed Codex target evaluation rejects
+`danger-full-access` because it bypasses the command network sandbox. If a test needs
+localhost or external access, it cannot use that strict managed Codex evaluation path.
+Use a separately reviewed runner with an explicit network allowlist instead.
+Managed target evaluation also requires `workspace-write`: the verified deny-all
+network proxy setting applies to that sandbox. A `read-only` target evaluation is
+rejected because its loopback behavior has not been verified in this environment.
 Profiles do not contain literal credentials. `api_key_env` names an existing
 environment variable. API URLs must not contain passwords, query strings or keys.
 Use absolute executable/script paths; role working directories are empty.
+
+Every managed target evaluation using the `codex` or `codex_subagent` executor preserves
+user config and exec-policy rules, then adds one-shot Codex CLI network/tool overrides:
+it enables the workspace-write network proxy with an empty domain allowlist, blocks local/private
+destinations, disables upstream proxy chaining, sets `web_search="disabled"`, empties
+`mcp_servers`, and disables Apps, Browser Use and Computer Use. These controls apply
+to sandboxed shell commands and their subprocesses. Codex still needs its client-side
+model and authentication connection; the policy does not mean the whole CLI process
+is offline. Unknown Codex config fields fail under `--strict-config`.
 
 ## Actual execution paths
 

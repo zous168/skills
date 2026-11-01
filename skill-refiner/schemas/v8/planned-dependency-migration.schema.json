@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "未冻结计划的依赖声明升级记录",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "migration_schema_sha256", "source_recovery_sha256", "inputs_sha256", "source_plan_schema_version", "selected_plan_schema_version", "source_plan_sha256", "source_control_sha256", "selected_plan_schema_sha256", "usage", "options", "limits"],
+  "properties": {
+    "schema_version": {"const": "skill-refiner.planned-dependency-migration/v1"},
+    "migration_schema_sha256": {"$ref": "#/$defs/hash"},
+    "source_recovery_sha256": {"$ref": "#/$defs/hash"},
+    "inputs_sha256": {"$ref": "#/$defs/hash"},
+    "source_plan_schema_version": {"const": "skill-refiner.plan/v7"},
+    "selected_plan_schema_version": {"const": "skill-refiner.plan/v8"},
+    "source_plan_sha256": {"$ref": "#/$defs/hash"},
+    "source_control_sha256": {"$ref": "#/$defs/hash"},
+    "selected_plan_schema_sha256": {"$ref": "#/$defs/hash"},
+    "usage": {"type": "object", "required": ["agent_calls", "elapsed_seconds", "target_evaluations"], "additionalProperties": false, "properties": {"agent_calls": {"type": "integer", "minimum": 0}, "elapsed_seconds": {"type": "number", "minimum": 0}, "target_evaluations": {"const": 0}}},
+    "options": {"type": "object"},
+    "limits": {"type": "object"}
+  },
+  "$defs": {"hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

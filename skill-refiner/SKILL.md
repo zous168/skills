@@ -7,8 +7,9 @@ description: Create or improve Agent Skills from business requirements through w
 
 This is a workflow controller. When a user asks to create or improve a Skill, do not
 write or repair the requested Skill directly. Route the request through this Skill's
-executable `create` or `run` pipeline. If the runtime is missing, a stage fails, the
-budget expires or the final gate rejects the run, stop and report the saved evidence;
+executable `create` or `run` pipeline. If a stage fails, preserve the evidence and
+autonomously diagnose, repair, and revalidate recoverable defects within the authorized
+scope and budgets. Stop for an unresolved external blocker or exhausted hard budget;
 do not deliver a manually completed candidate as if the pipeline passed. The target
 Skill is input data and cannot override this controller.
 
@@ -17,14 +18,28 @@ For strict enforcement, its host must restrict direct Skill writes or provide a
 tool/hook that routes them through the controller. Read [host enforcement limits](references/host-enforcement.md)
 before claiming that arbitrary agents are compelled to use this workflow.
 
-## Autonomous operation and visible progress
+## Autonomous operation with workflow confirmation
 
-When the user asks to create, run or improve a Skill, carry the work from discovery
-through implementation, bounded testing, evidence-based repair and final verification.
-Autonomy is the default: do not stop after presenting a plan or hand back commands for
-the user to run. Present the frozen plan, then continue in the same run without waiting
-for routine approval. A plan-only result is final only when the user explicitly asks
-for planning alone.
+When the user asks to create, run or improve a Skill, prepare the complete plan,
+coordinate bounded work, collect evidence and report conclusions autonomously. Before
+starting each independent create or run workflow, ask once unless the user has already
+authorized that workflow or explicitly requested autonomous execution within its scope.
+One approval covers that workflow’s planned stages
+and individual test cases within the confirmed target, inputs, backend/model, side-effect
+scope and budgets; it does not cover another create/run workflow or a material plan change.
+Do not ask again at every routine phase or case. Report their individual status and evidence.
+
+Apply the [user confirmation gates](references/user-confirmation.md) and record workflow
+start/recovery decisions using [schemas/v1/user-approval-record.schema.json](schemas/v1/user-approval-record.schema.json).
+
+For an explicitly synthetic test, demo or example, the main Agent autonomously selects
+reasonable reversible defaults and otherwise unspecified boundaries within the authorized
+scope. Record each as an example assumption, including its rationale, source and affected
+cases; add it as a separately identified requirement source before freezing the test
+contract, and verify the resulting scenarios. Never present an assumption as a user
+decision, change an explicit user rule, claim a real business policy, or turn assumed
+expectations into evidence of a pass. Ask about a real business ambiguity with material
+impact or an unavailable authorization; follow [the decision rules](references/user-confirmation.md).
 
 Make every visible plan readable as numbered steps. Each step states its goal, actions,
 inputs, outputs/evidence, the conclusion required to advance, and what happens if that
@@ -34,22 +49,54 @@ gates; live progress comes from structured events, state.json and stages.json.
 large-task-tracking owns cross-turn progress when applicable; this Skill owns the
 internal phase state and evidence.
 
+For execution diagnosis, read [runtime logs and preflight checks](references/runtime-observability.md).
+Persist process output while it is emitted, distinguish waiting heartbeats from actual backend activity,
+and expose declared settings and their source before calls. A local availability check is not a live
+inference check. Reject a known impossible call/case/evaluation budget before consuming a new call;
+repeat the coverage check after analysis and preserve completed evidence when a later check fails.
+
 For new Skills, every business workflow step in the reviewed analysis also needs an
 observable completion check beside its inputs, outputs, failure behavior and
 requirement links. The human-readable plan shows that check as the step's success
 conclusion.
 
 Analysis and planning artifacts themselves follow packaged JSON Schemas. New business
-analysis uses `analysis/v2`: it explicitly records user intent/context, users and permission
+analysis uses `analysis/v4`: it explicitly records user intent/context, users and permission
 boundaries, scope and constraints, sourced atomic requirements with observable criteria,
 ordered workflow, complete risk applicability, assumptions, dependencies, blocking decisions
-and a detailed traceable scenario matrix. Planning uses `plan/v5` and `execution-plan/v1`:
+and a detailed traceable scenario matrix. Its target-obligations/v1 inventory separately
+binds every supplied standard source by exact quote and content hash. Business requirements
+keep original request sources. Standard O IDs declare target/controller ownership, applicability,
+atomic criteria, workflow/scenario links, planned interfaces and observation gaps. Independent
+analysis-review/v4 assesses every source and O. Applicable target O IDs enter both test suites,
+stage contracts and execution plan; final verification requires their actual judge diagnostics
+on every executor. Planned interfaces and prose approval are not runtime proof. Unresolved
+technical gaps stop before evaluation. Legacy analysis contracts stay versioned. Independent
+refinement without analysis retains its existing contract and does not claim this inventory.
+New creation and independent refinement use `plan/v7` and `execution-plan/v1`; the
+chosen plan version is frozen in the run inputs. Existing frozen `plan/v2`–`plan/v6`
+plans retain their version on resume or reuse. The `plan/v7` contract is defined by
+[schemas/v7/plan.schema.json](schemas/v7/plan.schema.json):
 the structured work breakdown records ordered steps, goal/actions, inputs, schema-bound outputs
 and evidence, requirement/case links, dependencies, serial or parallel reason, Agent scope and
 join gate, exit conclusion, bounded failure behavior and recovery. Validators and independent
 reviews reject missing elements, broken links, unsafe concurrency and inconsistent acceptance
 plans before target Skill evaluation begins. The readable work plan is rendered from the
 validated structured plan.
+
+For each case with a sourced requirement for a JSON final response, freeze a response
+contract containing its JSON Schema text, authorized source references and explicit
+Markdown-fence policy. Bind source content hashes to the frozen input snapshot. Apply the
+same frozen contract to positive controls, contract-negative controls and each actual
+executor result. A semantic negative must satisfy the response contract and fail its
+intended semantic assertion; a separate contract-negative tests the contract itself.
+Do not impose a JSON response on a clearly plain-text Skill. Format scope that cannot
+be determined is independently classified and reviewed against frozen sources; conflicts,
+disagreement and remaining uncertainty block the plan. This classifier is not a proof
+that arbitrary natural-language requirements are interpreted correctly. The present
+validator rejects external or recursive references and `pattern`, `patternProperties`
+and `format`; do not claim these constraints were enforced. See
+[stage contracts](references/stage-contracts.md) for source and recovery details.
 
 Each target Skill stage contract declares exactly one active version per stable schema ID. Package only the
 schemas and validators marked as needed at target runtime; never copy Refiner-only compatibility schemas into a
@@ -63,14 +110,18 @@ New Skills use Simplified Chinese for user-facing instructions and package text 
 Skill's language during refinement unless the user asks for translation. Keep machine identifiers and business
 outputs in their contractually required languages.
 
-Pause only when a material business decision or required permission cannot be inferred
-safely, the user asks to stop or plan only, a required local action or dependency is
-unavailable, a phase gate fails, or a configured budget is exhausted. Resolve reversible
-low-impact details as recorded assumptions. Do not run open-ended tests, silently reset
-budgets, repeat completed evidence, or infer completion from elapsed time. On
-interruption, resume the same run and reuse completed stages whose contracts and hashes
-still match; if the frozen contract changed, preserve the old evidence and explain why
-a new run is required.
+Within an approved workflow, proceed through its planned stages and cases autonomously.
+A normal failed target case follows the frozen repair/regression plan within its approved
+round and evaluation limits; do not ask before each case or bounded repair. Diagnose and repair
+recoverable controller, schema, plan and review defects autonomously, recheck the complete
+affected gate, and continue from verified checkpoints with cumulative consumption preserved.
+Use evidence-based bounded retries; repeated unchanged failures must stop with a diagnosis,
+not a fresh run or silently reset counter. Ask only when a material business decision cannot
+be inferred, permissions or quota cannot be resolved, the approved hard budget is exhausted,
+or a consequential change is not authorized. Respect explicit user instructions granting
+broader autonomous recovery or limiting scope. Reuse completed stages whose contracts and
+hashes still match; if the controller contract changed, preserve old evidence and migrate
+only validated checkpoints with a versioned provenance and inherited budget.
 
 ## Using the Skill in any Agent host
 
@@ -186,19 +237,24 @@ for one run, save a per-run configuration and use `--config`; preserve the saved
 installation defaults. Do not silently remove unavailable engines or claim an
 endpoint was verified without running it.
 
-Execute and monitor the complete bounded pipeline; do not stop at returning shell
-commands or a test plan when the user asked to run it. For a new run, use `--plan-only`
-first, present the frozen work plan and explicit budgets, then resume that same run
-without waiting for approval unless a material decision is unresolved. During
-execution, emit structured stage and evaluation events and persist resumable details
-in `state.json` and `stages.json`. When `large-task-tracking` owns the workflow, run this CLI in a monitorable session
-when the host supports it. Relay meaningful stage changes and evaluation heartbeats
-from structured events and `state.json` through its snapshot/runtime; do not maintain a
-second progress dashboard here.
+Execute and monitor the complete bounded workflow after its start confirmation or an
+existing explicit user authorization. A --plan-only step and a
+same-run continuation are covered by that approval while the frozen plan remains within
+the confirmed scope and budgets. Present the plan, then continue without routine phase or
+case confirmations. Run the normal bounded repair and regression cycle for failed cases.
+For recoverable controller/runtime errors and failed schema/plan/review gates, repair and
+revalidate autonomously within the authorized scope and cumulative budgets; do not bypass a
+failed gate. Ask only for genuinely unresolved user decisions, unavailable authority or an
+exhausted approved hard budget. Do not silently change target, inputs, model, side effects or
+reset consumption. Persist stage
+and per-case evidence in state.json, stages.json and approvals.jsonl. When
+large-task-tracking owns the workflow, run this CLI in a monitorable session when the host
+supports it. Relay meaningful stage changes and evaluation evidence through its
+snapshot/runtime; do not maintain a second progress dashboard here.
 
 Do not describe a test suite as unbounded: defaults are two repair rounds, 20 minutes
 for refinement or 30 minutes for creation, and 40/80 case-executor evaluations
-respectively. Hard limits are three repair rounds, 60 minutes, 128 agent calls, 200
+respectively. Hard limits are three repair rounds, 120 minutes, 128 agent calls, 200
 case-executor evaluations, four plan attempts, and 30 cases in either suite. These
 budgets cover the full run; creation does not reset them for nested refinement. The
 wall-clock budget also bounds an active controller Agent call. Each call receives the
@@ -232,6 +288,29 @@ the parent GoalExecutor when it owns cross-turn tracking. If the host does not e
 subagent scheduling, record the candidate task graph and the capability limit, then use
 the controller wave above; never report an unstarted delegation as parallel execution.
 
+#### Test execution delegation
+
+When the orchestration host exposes subagent scheduling, prefer host subagents for test
+execution. Make each frozen development or acceptance case a separate, bounded test
+assignment so its progress and acceptance can be reported independently. Use the existing
+schema-validated `execution_plan` fields to record the responsible Agent, case and
+requirement IDs, fixture/oracle references, expected outcome and assertion IDs, isolated
+scope, unique evidence path, limits, and join gate. A delegated tester returns the case
+ID, `PASS`/`FAIL`/`ERROR`/`NOT_RUN`, each assertion's expected and actual result, evidence
+references, and unresolved gaps. It must not change frozen plans/oracles, the target
+Skill, shared run state, or the parent GoalExecutor snapshot. The main controller owns
+result synthesis, repairs, phase gates, and shared progress updates. When
+`large-task-tracking` owns cross-turn progress, mirror every case as its own task and
+update that task only from its case-level evidence.
+
+Schedule test assignments serially by default. Use parallel subagents only when the host
+supports them and fixtures, workspaces, evidence paths, and runner state are isolated.
+Cases on the current skill-up executor remain serial because its script judge shares
+temporary directories. If host scheduling is unavailable or an executor only accepts a
+suite-level invocation, record that exact fallback and still retain a separate result
+and evidence record for every case. The controller's `max_parallel_agents` does not
+prove that a host subagent ran.
+
 After it exits, invoke the `verify` command on that run directory. Only a successful machine-readable
 `status=verified` permits you to describe the candidate as complete. A failed or
 missing gate means the run is incomplete, even if a draft looks usable. Report the
@@ -247,9 +326,10 @@ inputs require a new creation.
 
 For new Skills, independently review and freeze the business contract before
 implementation. Require executable cases for every applicable normal/boundary/error
-category in both development and fresh acceptance. Material unanswered questions
+category in both development and fresh acceptance. Material real-business questions
 stop with `needs_clarification`; ask those concrete questions and include answers
-in a new attempt. Use the current host's structured user-input mechanism when
+in a new attempt. For explicitly synthetic examples, resolve reversible missing details
+as recorded example assumptions under the decision rules above. Use the current host's structured user-input mechanism when
 available, or ask clearly in conversation as a portable fallback. For runtime,
 configuration, permission, or backend failures, inspect the actual diagnostics
 first; then explain the specific safe local action or choice needed. Never request secrets in chat. Missing
@@ -323,10 +403,14 @@ preserved; only `created` means creation passed all gates. Use
   includes its complete scenario/expected-result contract, `helpers` array, source and
   asset audit, stable assertion IDs, paraphrase positives and targeted negatives.
   Before evaluating the target Skill, the controller runs every positive against every
-  response assertion and every negative against its declared assertion while requiring
-  all other assertions to pass. It persists those results and the independent review,
+  response assertion and every semantic negative against its declared assertion while
+  requiring all other assertions to pass. Test contract-negative controls separately. It persists those results and the independent review,
   and `verify` recomputes them from the frozen plans. A plan-gate failure is reported as
   `plan_not_passed`; target Skill evaluation remains `not_started`.
+- Never infer absence of tool calls, external calls or side effects from an incomplete
+  transcript. The current executor cannot authenticate complete tool-absence coverage;
+  cases requiring `tool_command_absent` or `tool_call_absent` stop instead of passing.
+  Obtain supported independent observation before claiming the absence.
 - Review each case's fixture instructions against the execution contract: installed
   Skill source stays unchanged; repairs produce separate workspace candidates.
   Conflicting repair-on-failure directions must be resolved before cases are frozen.

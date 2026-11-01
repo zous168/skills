@@ -28,9 +28,21 @@ On write capture, outputs are checked before a stage can complete; inputs and ou
 the completion gate and again before handoff. Resume reloads the package schemas, compares their
 hashes and the complete stage contract, then revalidates every completed input/output before reuse.
 Final verification repeats those checks. Missing or changed schemas, invalid content, missing files
-or changed hashes block completion and reuse. A controller/schema change requires a new run, with
-the old evidence left intact. Optional reused plans, drafts and call transcripts may be absent in a
-new run, but any recorded evidence is still validated and hash-checked.
+or changed hashes block completion and reuse. A controller/schema change requires either a new run
+or an explicitly supported, evidence-validated migration, with the old evidence left intact.
+Optional reused plans, drafts and call transcripts may be absent in a new run, but any recorded
+evidence is still validated and hash-checked.
+
+An authenticated legacy, unfinished plan can be migrated only through the supported
+`refine_plan_recovery` path: retain the original run and validated historical call/input
+evidence, carry forward elapsed time, agent calls and evaluations, and record the new version
+selection in `response-contract-migration.json` under
+[response-contract-migration.schema.json](../schemas/v7/response-contract-migration.schema.json).
+Only a proven one-to-one case-ID normalization is accepted; independent review assesses
+each recorded semantic change. An unfinished legacy run without authenticated recovery
+evidence blocks. A migrated v7 plan cannot currently be reused in a different run without
+portable authenticated migration provenance. Frozen v2–v6 runs remain on their old versions.
+Migration does not erase prior consumption or waive source, control or review gates.
 
 For refinement runs, `run --resume-from RUN_DIRECTORY` reopens the same run directory.
 Before continuing, it checks the target and frozen-input manifests, controller/backend
@@ -113,6 +125,49 @@ rejected before transmission. Reduce the stage handoff or set a tested limit; do
 remove required inputs, tests, or evidence just to fit. Full source and execution
 evidence remain in the run directory even when a role receives a bounded excerpt.
 
+## Response contracts and evidence boundaries
+
+New plans use the packaged [`plan/v7` Schema](../schemas/v7/plan.schema.json). Each case
+declares `response_contract`: `null` for a case without an applicable JSON final-response
+requirement, or `schema_json`, `source_refs` and `allow_markdown_fence`. A source reference
+identifies content in the authenticated frozen inputs; its hash binds the content, not an
+unverified path supplied by the model. An existing target schema is evidence to inspect and
+must not override the original business requirements. Clearly text-only responses are not
+forced into JSON.
+
+The same frozen contract is applied to every positive control and actual executor result.
+A contract-negative control is checked against the contract separately; each semantic negative
+must first satisfy that contract and then fail its declared semantic assertion. Full controls,
+source and asset checks, and independent plan review all precede target evaluation. V7 review
+uses [plan-review.schema.json](../schemas/v7/plan-review.schema.json) or
+[plan-review-recovery.schema.json](../schemas/v7/plan-review-recovery.schema.json) to map
+each issue to affected cases, requirements or scenarios. Each newly generated revision attempt persists
+[plan-revision-context.schema.json](../schemas/v7/plan-revision-context.schema.json) data:
+its baseline hash, complete feedback, sources, allowed case IDs and before/after differences.
+The plan gate and final verifier recompute that history; unresolved scope blocks the gate.
+The review validators currently use the matching in-memory definitions in `scripts/refiner/schemas.py`;
+the two packaged review Schema files mirror those definitions. The review and revision-context
+Schema files are not yet entries in the stage Schema registry, so do not claim those three files
+are individually hash-pinned by `stages.json`. The revision-context Schema is read for validation.
+
+When JSON applicability is unresolved, the controller uses two independent blind role
+contexts under a shared, atomic call-budget reservation. Their per-case assessments cite
+verbatim frozen source content and use
+[response-applicability-analysis.schema.json](../schemas/v7/response-applicability-analysis.schema.json);
+the recorded decision is checked with
+[response-applicability-decision.schema.json](../schemas/v7/response-applicability-decision.schema.json)
+and bound to input, plan, schema and call evidence. Review disagreement, uncertain scope or
+conflicting response requirements cannot open the gate. These analyses share the configured
+backend and do not prove interpretation correctness. Applicability detection is conservative,
+not a complete natural-language interpreter. The current response validator rejects external
+or recursive references and schema keywords `pattern`, `patternProperties` and `format`;
+unsupported contracts fail closed.
+
+Tool traces must cover every relevant entry point before an absence assertion can pass. The
+current executor cannot independently establish complete absence coverage and therefore blocks
+`tool_command_absent` and `tool_call_absent` cases. An incomplete transcript is not evidence
+of no external call or no side effect.
+
 ## Human-readable phase plan and progress
 
 The generated work-plan.md is the user-facing execution map, not only a list of test
@@ -124,7 +179,7 @@ requirement mapping. Both then show plan freezing, plan self-check and independe
 review, the plan gate, baseline, bounded repair with full regression, independent
 acceptance, and final verification/delivery.
 
-Business analysis uses the packaged `analysis/v2` contract. It makes the intent and usage
+New creation business analysis uses the packaged `analysis/v4` contract. It makes the intent and usage
 context, users/actors, in-scope and out-of-scope behavior, constraints, source-linked atomic
 requirements, ordered workflow, complete risk applicability, assumptions, dependencies and
 blocking decisions explicit. Every workflow step has an observable completion check beside
@@ -132,8 +187,11 @@ its actors, preconditions, inputs, outputs, failure behavior and requirement/dep
 The independent analysis review assesses every requirement, workflow step, scenario and risk
 dimension. A missing or inconsistent element blocks draft generation.
 
-Planning uses the packaged `plan/v5` and `execution-plan/v1` schemas. The structured execution
-plan is the source for its human-readable work-plan section; each step states its goal, actions,
+New creation and independent refinement use `plan/v7` and `execution-plan/v1`; the selected
+version is frozen in the inputs. Previously frozen `plan/v2`–`plan/v6` plans keep their version
+on resume or reuse. Target standard O obligations remain separately sourced and hash-bound in
+analysis/v4, join the effective R+O test contract, and require actual per-executor judge evidence
+at final verification. The structured execution plan is the source for its human-readable work-plan section; each step states its goal, actions,
 inputs, schema-bound outputs/evidence, linked requirements and cases, dependencies, serial or
 parallel schedule, Agent write scope, merge owner, join gate, exit evidence and bounded failure/
 recovery policy. Structural validation checks complete traceability, safe unique outputs, an
@@ -152,13 +210,15 @@ running or terminal in persisted state; explain why dependent or shared-scope ta
 serial. Never describe a candidate graph as a running task or treat one completed branch as
 a passed wave.
 
-Presenting the plan is a visibility checkpoint, not routine approval. Unless the user
-explicitly requests plan-only, proceed autonomously in the same run. Pause for a
-material unanswered decision, required permission/local action, explicit user stop,
-failed gate, unavailable dependency, or exhausted configured budget. Do not reset the
-budget, repeatedly run unchanged tests, or abandon a resumable stage. Resume the same
-run and reuse completed evidence while hashes and contracts match. A changed frozen
-input or controller contract requires preserving the old evidence and using a new run.
+Presenting the plan is a visibility checkpoint within an approved workflow. Follow
+[user confirmation gates](user-confirmation.md): execute planned stages and cases autonomously,
+including bounded repair/regression for normal case failures. Diagnose and repair recoverable
+operational errors and failed gates within the authorized scope and cumulative budget; rerun
+the affected full controls and resume validated work. Ask for an unresolved material user
+decision, unavailable authority or an exhausted approved hard budget. Do not reset the budget,
+repeatedly run unchanged tests, or abandon a resumable stage. Resume the same run and reuse
+completed evidence while hashes and contracts match; otherwise preserve old evidence and use a
+new run or an explicitly supported, evidence-validated migration.
 
 At each meaningful transition, report the step number/name, live status, concise
 conclusion, evidence path, and next step. Populate these from structured events and
@@ -175,9 +235,9 @@ displayed as running.
 | Stage | Required input artifacts | Output artifacts and formats | Gate before handoff |
 |---|---|---|---|
 | Creation: inputs | User description, supplied requirements, auto-discovered project standards, and optional additional standards | `inputs.json` (JSON), `inputs/*.md` (UTF-8 Markdown/text) | Inputs frozen and hashed in the business contract |
-| Creation: analysis | Frozen business inputs | `analysis.json`, `analysis-review.json` (JSON), `business-analysis.md` (Markdown), `business.lock.json` (JSON) | `analysis/v2` validates context, users/actors, scope, constraints, sourced atomic requirements, ordered workflow, full risk applicability, assumptions, dependencies and blocking decisions; review assesses every workflow/risk row; unresolved decisions pause creation |
+| Creation: analysis | Frozen business inputs | `analysis.json`, `analysis-review.json` (JSON), `business-analysis.md` (Markdown), `business.lock.json` (JSON) | `analysis/v4` validates context, users/actors, scope, constraints, sourced atomic requirements, ordered workflow, full risk applicability, assumptions, dependencies and blocking decisions; review assesses every workflow/risk row; unresolved decisions pause creation |
 | Creation: first draft | Approved analysis and business lock | `drafts/` (Skill source files), `draft-manifest.json` (path-to-SHA-256 JSON) | Draft paths and static authoring checks pass |
-| Refinement: planning | Immutable Skill snapshot, requirements, auto-discovered project standards, additional standards, analysis contract and the actual plan schema | `test-plan.json`, `acceptance-plan.json`, `plan-controls/{development,acceptance}.json`, `plan-reviews/{development,acceptance}.json`, `oracle.lock.json` (JSON) | `plan/v5` validates atomic criteria, detailed scenario/control matrix, stage contracts and an execution plan with ordered steps, evidence-bound outputs, requirement/case links, dependency DAG, bounded concurrency, Agent scopes, exit criteria and failure/recovery rules; development and acceptance preserve the same work plan; full controls, asset/source audits and independent reviews must pass before the plan gate |
+| Refinement: planning | Immutable Skill snapshot, requirements, auto-discovered project standards, additional standards, analysis contract and the actual plan schema | `test-plan.json`, `acceptance-plan.json`, `plan-controls/{development,acceptance}.json`, `plan-reviews/{development,acceptance}.json`, `oracle.lock.json` (JSON) | `plan/v7` validates atomic criteria, detailed scenario/control matrix, stage contracts and an execution plan with ordered steps, evidence-bound outputs, requirement/case links, dependency DAG, bounded concurrency, Agent scopes, exit criteria and failure/recovery rules; development and acceptance preserve the same work plan; full controls, asset/source audits and independent reviews must pass before the plan gate |
 | Refinement: baseline | Locked development plan and original Skill snapshot | `baseline/summary.json`, `baseline/standards.json` (JSON), backend logs/evidence | All configured engines return observed results; environment errors stop repair |
 | Repair | Failed-case results (including immutable per-attempt acceptance summaries after held-out failure), material standards findings, frozen requirements, prioritized source excerpts | `iterations/round-N/changes.json` (JSON), candidate Skill files, call request/response manifests | Each changed file cites a failed case or finding; protected tests and oracles cannot be edited |
 | Regression | Candidate, same frozen development suite, original passing-case set | `iterations/round-N/regression/summary.json`, `standards.json`, engine comparisons (JSON/Markdown) | No previously passing case regresses; each engine is judged separately |

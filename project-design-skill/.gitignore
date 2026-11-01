@@ -1,0 +1,12 @@
+# deps & build output
+node_modules/
+dist/
+*.log
+
+# local / third-party / generated
+.claude/
+.agents/
+.skills/
+.taste-skill/
+.DS_Store
+Thumbs.db

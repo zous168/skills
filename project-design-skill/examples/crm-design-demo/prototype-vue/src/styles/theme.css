@@ -1,0 +1,32 @@
+/* 轻量布局补充；视觉主体由 Element Plus 默认主题提供（主色 #409eff 即所选 EP 主色）。 */
+html, body, #app { height: 100%; margin: 0; }
+body { font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Microsoft YaHei", Arial, sans-serif; background: var(--el-bg-color-page); }
+
+.num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+.muted { color: var(--el-text-color-secondary); }
+.faint { color: var(--el-text-color-placeholder); }
+.page-pad { padding: 16px 18px 28px; }
+.page-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.page-head .sp { flex: 1; }
+.row-between { display: flex; align-items: center; justify-content: space-between; }
+.mt8 { margin-top: 8px; } .mt12 { margin-top: 12px; } .mt16 { margin-top: 16px; }
+.amt { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* KPI 条 */
+.kpi-strip { display: flex; flex-wrap: wrap; }
+.kpi-cell { flex: 1; min-width: 120px; padding: 4px 16px; border-right: 1px solid var(--el-border-color-lighter); }
+.kpi-cell:last-child { border-right: 0; }
+.kpi-cell .v { font-size: 20px; font-weight: 600; }
+.kpi-cell .l { font-size: 12px; color: var(--el-text-color-secondary); }
+
+/* 工作台双栏 → 窄屏堆叠 */
+.wb-grid { display: grid; grid-template-columns: 360px 1fr; gap: 14px; align-items: start; }
+@media (max-width: 1024px) { .wb-grid { grid-template-columns: 1fr; } }
+
+/* 漏斗条 */
+.fbar { height: 32px; border-radius: 4px; color: #fff; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-size: 13px; }
+
+/* 看板列 */
+.kb { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 12px; align-items: start; overflow-x: auto; }
+.kb .oc { cursor: pointer; }
+.kb .oc:hover { border-color: var(--el-color-primary); }

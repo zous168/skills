@@ -1,0 +1,1138 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "requirements",
+    "cases",
+    "coverage_gaps",
+    "assumptions",
+    "stage_contracts",
+    "execution_plan"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "skill-refiner.plan/v6"
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "behavior",
+          "source",
+          "required",
+          "acceptance_criteria"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "behavior": {
+            "type": "string",
+            "minLength": 8
+          },
+          "source": {
+            "type": "string",
+            "minLength": 3
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "statement",
+                "evidence"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "statement": {
+                  "type": "string",
+                  "minLength": 8
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 8
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "requirement_ids",
+          "kind",
+          "scenario",
+          "expected_outcome",
+          "prompt",
+          "files",
+          "checks",
+          "helpers",
+          "asset_audit",
+          "positive_controls",
+          "negative_controls",
+          "oracle_reason",
+          "good_response",
+          "bad_response",
+          "scenario_id",
+          "acceptance_criteria_ids",
+          "scenario_detail"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "requirement_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "enum": [
+              "normal",
+              "boundary",
+              "error",
+              "negative",
+              "regression"
+            ]
+          },
+          "scenario": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected_outcome": {
+            "type": "string",
+            "minLength": 1
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "files": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "helpers": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "python_probe"
+              ]
+            }
+          },
+          "asset_audit": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "status",
+              "required_paths",
+              "available_paths",
+              "source_refs",
+              "basis"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "ready",
+                  "not_required",
+                  "missing"
+                ]
+              },
+              "required_paths": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "available_paths": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "source_refs": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "basis": {
+                "type": "string",
+                "minLength": 12
+              }
+            }
+          },
+          "positive_controls": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "response"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "response": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "negative_controls": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "assertion_id",
+                "response",
+                "rationale"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "assertion_id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "response": {
+                  "type": "string"
+                },
+                "rationale": {
+                  "type": "string",
+                  "minLength": 12
+                }
+              }
+            }
+          },
+          "checks": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "type",
+                "value"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "type": {
+                  "enum": [
+                    "contains",
+                    "contains_any",
+                    "not_contains",
+                    "not_contains_any",
+                    "regex",
+                    "text_equal",
+                    "tool_command",
+                    "tool_command_absent",
+                    "tool_call_absent",
+                    "tool_output_matches",
+                    "json_equal",
+                    "json_sequence_equal",
+                    "json_path_equal",
+                    "json_path_regex",
+                    "json_path_matches_file",
+                    "file_exists",
+                    "file_contains",
+                    "file_text_equal",
+                    "file_json_equal",
+                    "file_json_path_equal"
+                  ]
+                },
+                "value": {},
+                "path": {
+                  "type": "string"
+                },
+                "pointer": {
+                  "type": "string"
+                },
+                "control_command": {
+                  "type": "string"
+                },
+                "control_tool_name": {
+                  "type": "string"
+                },
+                "expected_exit_code": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "literal_command": {
+                  "type": "boolean"
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "contains_any",
+                          "not_contains_any"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "value": {
+                        "type": "array",
+                        "minItems": 2,
+                        "uniqueItems": true,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "const": "json_path_matches_file"
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "path",
+                      "pointer"
+                    ],
+                    "properties": {
+                      "value": {
+                        "type": "object",
+                        "oneOf": [
+                          {
+                            "required": [
+                              "file_pointer"
+                            ],
+                            "properties": {
+                              "file_pointer": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          {
+                            "required": [
+                              "pointer"
+                            ],
+                            "properties": {
+                              "pointer": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "const": "json_path_regex"
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "pointer"
+                    ],
+                    "properties": {
+                      "value": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "const": "tool_call_absent"
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "control_tool_name"
+                    ],
+                    "properties": {
+                      "value": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "oracle_reason": {
+            "type": "string",
+            "minLength": 12
+          },
+          "good_response": {
+            "type": "string"
+          },
+          "good_responses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "bad_response": {
+            "type": "string"
+          },
+          "scenario_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "acceptance_criteria_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "scenario_detail": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "title",
+              "preconditions",
+              "stimulus",
+              "actions",
+              "expected_observables",
+              "forbidden_outcomes",
+              "risk_dimensions",
+              "basis"
+            ],
+            "properties": {
+              "title": {
+                "type": "string",
+                "allOf": [
+                  {
+                    "if": {
+                      "not": {
+                        "pattern": "[\\u3400-\\u9fff]{2}"
+                      }
+                    },
+                    "then": {
+                      "minLength": 8
+                    }
+                  }
+                ]
+              },
+              "preconditions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 3
+                }
+              },
+              "stimulus": {
+                "type": "string",
+                "minLength": 8
+              },
+              "actions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 3
+                }
+              },
+              "expected_observables": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 5
+                }
+              },
+              "forbidden_outcomes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "allOf": [
+                    {
+                      "if": {
+                        "not": {
+                          "pattern": "[\\u3400-\\u9fff]{2}"
+                        }
+                      },
+                      "then": {
+                        "minLength": 5
+                      }
+                    }
+                  ]
+                }
+              },
+              "risk_dimensions": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "input_variation",
+                    "workflow_state",
+                    "role_permission",
+                    "dependency_failure",
+                    "cross_requirement",
+                    "side_effect",
+                    "retry_recovery",
+                    "idempotency",
+                    "ambiguity_conflict",
+                    "asset_handling",
+                    "safety_boundary",
+                    "other"
+                  ]
+                }
+              },
+              "basis": {
+                "type": "string",
+                "minLength": 12
+              }
+            }
+          }
+        }
+      }
+    },
+    "coverage_gaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "stage_contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schemas",
+        "stages"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "skill-refiner.skill-stage-contracts/v1"
+        },
+        "schemas": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Declare one active version per stable logical schema ID. Keep historical compatibility formats inside the authoring controller, not in a delivered target Skill contract.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "version",
+              "path",
+              "validator_id",
+              "validator_path",
+              "runtime_needed"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+              },
+              "version": {
+                "type": "string",
+                "pattern": "^v[0-9]+$"
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^schemas/v[0-9]+/[A-Za-z0-9._/-]+\\.schema\\.json$",
+                "description": "The vN directory must match the declared schema version."
+              },
+              "validator_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "validator_path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "runtime_needed": {
+                "type": "boolean"
+              },
+              "media_type": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "stages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "goal",
+              "requirement_ids",
+              "inputs",
+              "outputs",
+              "validation_gate",
+              "validation_points",
+              "failure_states",
+              "completion_check",
+              "resume_policy"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+              },
+              "goal": {
+                "type": "string",
+                "minLength": 8
+              },
+              "requirement_ids": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/stage_artifact"
+                }
+              },
+              "outputs": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/stage_artifact"
+                }
+              },
+              "validation_gate": {
+                "type": "string",
+                "minLength": 8
+              },
+              "validation_points": {
+                "type": "array",
+                "minItems": 4,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "after_generation",
+                    "before_handoff",
+                    "on_resume",
+                    "final_verification"
+                  ]
+                }
+              },
+              "failure_states": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "completion_check": {
+                "type": "string",
+                "minLength": 8
+              },
+              "resume_policy": {
+                "enum": [
+                  "reuse_if_contract_hashes_match",
+                  "retry_incomplete",
+                  "restart_stage"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "execution_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "objective",
+        "scope",
+        "max_parallel_agents",
+        "steps"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "skill-refiner.execution-plan/v1"
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 8
+        },
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "in_scope",
+            "out_of_scope",
+            "constraints"
+          ],
+          "properties": {
+            "in_scope": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 3
+              }
+            },
+            "out_of_scope": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 3
+              }
+            },
+            "constraints": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "max_parallel_agents": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "order",
+              "title",
+              "goal",
+              "actions",
+              "inputs",
+              "outputs",
+              "requirement_ids",
+              "case_ids",
+              "depends_on",
+              "execution_mode",
+              "parallel_wave",
+              "serial_reason",
+              "agent",
+              "exit_criteria",
+              "failure_policy"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+              },
+              "order": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 3
+              },
+              "goal": {
+                "type": "string",
+                "minLength": 8
+              },
+              "actions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 5
+                }
+              },
+              "inputs": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 3
+                }
+              },
+              "outputs": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "path",
+                    "schema_id",
+                    "schema_version",
+                    "evidence"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "schema_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "schema_version": {
+                      "type": "string",
+                      "pattern": "^v[0-9]+$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "minLength": 5
+                    }
+                  }
+                }
+              },
+              "requirement_ids": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "case_ids": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "depends_on": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "execution_mode": {
+                "enum": [
+                  "serial",
+                  "parallel"
+                ]
+              },
+              "parallel_wave": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "serial_reason": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "role",
+                  "scope",
+                  "write_scope",
+                  "merge_owner",
+                  "join_gate"
+                ],
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "minLength": 3
+                  },
+                  "scope": {
+                    "type": "string",
+                    "minLength": 8
+                  },
+                  "write_scope": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "merge_owner": {
+                    "type": "string",
+                    "minLength": 2
+                  },
+                  "join_gate": {
+                    "type": "string",
+                    "minLength": 8
+                  }
+                }
+              },
+              "exit_criteria": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "condition",
+                    "evidence"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                    },
+                    "condition": {
+                      "type": "string",
+                      "minLength": 8
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "minLength": 5
+                    }
+                  }
+                }
+              },
+              "failure_policy": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "action",
+                  "max_attempts",
+                  "terminal_state",
+                  "recovery_policy"
+                ],
+                "properties": {
+                  "action": {
+                    "enum": [
+                      "stop",
+                      "bounded_retry",
+                      "replan",
+                      "block"
+                    ]
+                  },
+                  "max_attempts": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2
+                  },
+                  "terminal_state": {
+                    "enum": [
+                      "blocked",
+                      "error",
+                      "not_passed"
+                    ]
+                  },
+                  "recovery_policy": {
+                    "enum": [
+                      "reuse_verified",
+                      "rerun_incomplete",
+                      "restart_step",
+                      "blocked"
+                    ]
+                  }
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "execution_mode": {
+                      "const": "serial"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "serial_reason"
+                  ],
+                  "properties": {
+                    "serial_reason": {
+                      "minLength": 8
+                    },
+                    "parallel_wave": {
+                      "type": "null"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "execution_mode": {
+                      "const": "parallel"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "parallel_wave"
+                  ],
+                  "properties": {
+                    "parallel_wave": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "failure_policy": {
+                      "properties": {
+                        "action": {
+                          "const": "stop"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "failure_policy": {
+                      "properties": {
+                        "max_attempts": {
+                          "const": 0
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "failure_policy": {
+                      "properties": {
+                        "action": {
+                          "enum": [
+                            "bounded_retry",
+                            "replan"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "failure_policy": {
+                      "properties": {
+                        "max_attempts": {
+                          "minimum": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "stage_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "media_type",
+        "schema_id",
+        "schema_version",
+        "required"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string",
+          "pattern": "^v[0-9]+$"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.plan-v6",
+  "x-schema-version": "v6"
+}

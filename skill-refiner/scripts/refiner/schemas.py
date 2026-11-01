@@ -1,5 +1,7 @@
 """Internal contracts, deliberately separate from skill-up's native YAML schema."""
 
+import copy
+
 CHECK = {
     "type": "object", "additionalProperties": False,
     "required": ["id", "type", "value"],
@@ -102,6 +104,12 @@ SCENARIO_DETAIL = {
         "basis": {"type": "string", "minLength": 12},
     },
 }
+SCENARIO_DETAIL_V3 = copy.deepcopy(SCENARIO_DETAIL)
+# Chinese conveys many complete labels in fewer codepoints than English.
+SCENARIO_DETAIL_V3["properties"]["title"] = {"type": "string", "allOf": [
+    {"if": {"not": {"pattern": "[\\u3400-\\u9fff]{2}"}}, "then": {"minLength": 8}}]}
+SCENARIO_DETAIL_V3["properties"]["forbidden_outcomes"]["items"] = {"type": "string", "allOf": [
+    {"if": {"not": {"pattern": "[\\u3400-\\u9fff]{2}"}}, "then": {"minLength": 5}}]}
 SCENARIO_INTENT = {
     "type": "object", "additionalProperties": False,
     "required": ["id", "kind", "applicable", "situation", "requirement_ids",
@@ -318,6 +326,80 @@ PLAN_V5 = {
                     "schema_version": {"const": "skill-refiner.plan/v5"},
                     "execution_plan": EXECUTION_PLAN},
 }
+PLAN_V6 = copy.deepcopy(PLAN_V5)
+PLAN_V6["properties"]["schema_version"] = {"const": "skill-refiner.plan/v6"}
+PLAN_V6["properties"]["cases"]["items"]["properties"]["scenario_detail"] = SCENARIO_DETAIL_V3
+# v7 declares each case's independent response contract.
+PLAN_V7 = copy.deepcopy(PLAN_V6)
+PLAN_V7["properties"]["schema_version"] = {"const": "skill-refiner.plan/v7"}
+PLAN_V7["properties"]["cases"]["items"]["required"].append("response_contract")
+PLAN_V7["properties"]["cases"]["items"]["properties"]["response_contract"] = {
+    "anyOf": [{"type": "null"}, {
+        "type": "object", "additionalProperties": False,
+        "required": ["schema_json", "source_refs", "allow_markdown_fence"],
+        "properties": {
+            "schema_json": {"type": "string", "minLength": 2},
+            "source_refs": {"type": "array", "minItems": 1, "uniqueItems": True,
+                            "items": {"type": "string", "minLength": 1}},
+            "allow_markdown_fence": {"type": "boolean"},
+        },
+    }],
+}
+# v8 adds explicit not-yet-created target dependencies per case. An empty array
+# means the case has no such target dependencies; it never implies availability.
+PLAN_V8 = copy.deepcopy(PLAN_V7)
+PLAN_V8["$id"] = "skill-refiner.plan-v8"
+PLAN_V8["x-schema-version"] = "v8"
+PLAN_V8["properties"]["schema_version"] = {"const": "skill-refiner.plan/v8"}
+_dependency_scenario = {
+    "type": "object", "additionalProperties": False,
+    "required": ["stimulus", "expected", "assertion_ids"],
+    "properties": {
+        "stimulus": {"type": "string", "minLength": 8},
+        "expected": {"type": "string", "minLength": 8},
+        "assertion_ids": {"type": "array", "minItems": 1, "uniqueItems": True,
+                          "items": {"type": "string", "minLength": 1}},
+    },
+}
+PLAN_V8["properties"]["cases"]["items"]["required"].append("planned_target_dependencies")
+PLAN_V8["properties"]["cases"]["items"]["properties"]["planned_target_dependencies"] = {
+    "type": "array", "maxItems": 40, "items": {
+        "type": "object", "additionalProperties": False,
+        "required": ["id", "target_path", "asset_kind", "requirement_ids", "source_refs", "implementation_step_id",
+                     "input_contract", "output_contract", "positive_scenario", "negative_scenario", "execution_contract"],
+        "properties": {
+            "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+            "target_path": {"type": "string", "minLength": 1, "maxLength": 240},
+            "asset_kind": {"enum": ["script", "schema", "reference", "other"]},
+            "requirement_ids": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string", "minLength": 1}},
+            "source_refs": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string", "minLength": 1}},
+            "implementation_step_id": {"type": "string", "minLength": 1},
+            "input_contract": {"type": "string", "minLength": 8},
+            "output_contract": {"type": "string", "minLength": 8},
+            "positive_scenario": copy.deepcopy(_dependency_scenario),
+            "negative_scenario": copy.deepcopy(_dependency_scenario),
+            "execution_contract": {
+                "type": "object", "additionalProperties": False,
+                "required": ["runner", "argv", "expected_exit_code", "expected_stdout", "positive_control", "negative_control"],
+                "properties": {
+                    "runner": {"const": "docker-python-response"},
+                    "argv": {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 4096}},
+                    "expected_exit_code": {"type": "integer", "minimum": 0, "maximum": 124},
+                    "expected_stdout": {"type": "string", "maxLength": 65536},
+                    "positive_control": {"$ref": "#/$defs/target_execution_control"},
+                    "negative_control": {"$ref": "#/$defs/target_execution_control"},
+                },
+            },
+        },
+    },
+}
+PLAN_V8.setdefault("$defs", {})["target_execution_control"] = {
+    "type": "object", "additionalProperties": False,
+    "required": ["input", "expected_exit_code", "expected_stdout"],
+    "properties": {"input": {"type": "string", "maxLength": 65536},
+                   "expected_exit_code": {"type": "integer", "minimum": 0, "maximum": 124},
+                   "expected_stdout": {"type": "string", "maxLength": 65536}},
+}
 PLAN = PLAN_V5
 REVIEW = {
     "type": "object", "additionalProperties": False,
@@ -404,6 +486,47 @@ PLAN_REVIEW = {
                            "basis": {"type": "string", "minLength": 12}}}},
     },
 }
+PLAN_REVIEW_RECOVERY = copy.deepcopy(PLAN_REVIEW)
+PLAN_REVIEW_RECOVERY["required"].append("recovery_assessments")
+PLAN_REVIEW_RECOVERY["properties"]["recovery_assessments"] = {
+    "type": "array", "items": {
+        "type": "object", "additionalProperties": False,
+        "required": ["change_id", "preserves_requirements", "reason"],
+        "properties": {"change_id": {"type": "string", "minLength": 1},
+                       "preserves_requirements": {"type": "boolean"},
+                       "reason": {"type": "string", "minLength": 12}},
+    },
+}
+# V7 review explicitly maps each rejected issue to affected scenarios/cases.
+# A reviewer must mark uncertainty instead of silently authorizing all cases.
+PLAN_REVIEW_V7 = copy.deepcopy(PLAN_REVIEW)
+PLAN_REVIEW_RECOVERY_V7 = copy.deepcopy(PLAN_REVIEW_RECOVERY)
+for _review in (PLAN_REVIEW_V7, PLAN_REVIEW_RECOVERY_V7):
+    _review["required"].append("revision_targets")
+    _review["properties"]["revision_targets"] = {
+        "type": "array", "items": {"type": "object", "additionalProperties": False,
+            "required": ["issue_index", "case_ids", "requirement_ids", "scenario_ids", "scope_known", "basis"],
+            "properties": {
+                "issue_index": {"type": "integer", "minimum": 0},
+                "case_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
+                "requirement_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
+                "scenario_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
+                "scope_known": {"type": "boolean"},
+                "basis": {"type": "string", "minLength": 12},
+            }}}
+# v8 independently reviews every planned target dependency and coverage.
+PLAN_REVIEW_V8 = copy.deepcopy(PLAN_REVIEW_V7)
+PLAN_REVIEW_RECOVERY_V8 = copy.deepcopy(PLAN_REVIEW_RECOVERY_V7)
+for _review8 in (PLAN_REVIEW_V8, PLAN_REVIEW_RECOVERY_V8):
+    _review8["required"].extend(["planned_dependency_coverage_complete", "planned_dependency_assessments"])
+    _review8["properties"]["planned_dependency_coverage_complete"] = {"type": "boolean"}
+    _review8["properties"]["planned_dependency_assessments"] = {
+        "type": "array", "items": {"type": "object", "additionalProperties": False,
+          "required": ["case_id", "dependency_id", "source_grounded", "interface_executable", "scenarios_discriminate", "implementation_link_valid", "basis"],
+          "properties": {"case_id": {"type": "string", "minLength": 1}, "dependency_id": {"type": "string", "minLength": 1},
+             "source_grounded": {"type": "boolean"}, "interface_executable": {"type": "boolean"},
+             "scenarios_discriminate": {"type": "boolean"}, "implementation_link_valid": {"type": "boolean"},
+             "basis": {"type": "string", "minLength": 12}}}}
 REPAIR = {
     "type": "object", "additionalProperties": False,
     "required": ["diagnosis", "changes", "unresolved"],

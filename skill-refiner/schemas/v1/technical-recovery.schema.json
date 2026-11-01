@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "skill-refiner.technical-recovery", "x-schema-version": "v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "inputs_sha256", "analysis_sha256", "clarification_sha256", "calls", "files"],
+  "properties": {
+    "schema_version": {"const": "skill-refiner.technical-recovery/v1"},
+    "inputs_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "analysis_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "clarification_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "calls": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "files": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+  }
+}

@@ -84,11 +84,9 @@ controller's concrete versioned contracts and context budget.
 
 ## 5. Plan independent tests before repair
 
-The readable plan is a visibility checkpoint, not an approval barrier. When the user
-asks for a Skill to be created or improved, continue autonomously after showing the
-plan unless the user explicitly requests plan-only or a material decision remains
-unresolved. Do not stop at instructions or commands when the current host can execute
-the next stage.
+The plan makes the work visible. Follow [user-confirmation.md](user-confirmation.md):
+confirm once before each complete create/run workflow, then execute its planned stages and
+cases autonomously. Ask again for execution problems or material scope changes.
 
 Make the plan a numbered sequence. For each step show its goal, actions, inputs,
 outputs/evidence, observable exit conclusion, and the stop or repair action when that

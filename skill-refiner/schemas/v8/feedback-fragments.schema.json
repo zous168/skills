@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.feedback-fragments-v1",
+  "x-schema-version": "v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "schema_sha256",
+    "fragments",
+    "feedback_sha256",
+    "instructions"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "skill-refiner.feedback-fragments/v1"
+    },
+    "schema_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "feedback_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "instructions": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fragments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token",
+          "text",
+          "sha256"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "pattern": "^<REFINER-GAP-[0-9]+>$"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    }
+  }
+}

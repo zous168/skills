@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import copy
 import shlex
 import sys
 import tempfile
@@ -22,19 +24,21 @@ sys.path.insert(0, str(SCRIPTS))
 
 from refiner.checks import validate_plan  # noqa: E402
 from refiner.agent import Agent as RefinerAgent  # noqa: E402
-from refiner.common import (PlanGateError, RefinerError, inventory, manifest, read_json,
+from refiner.common import (PlanGateError, RefinerError, digest, inventory, manifest, read_json,
                             PlanValidationError, run_process, write_json)  # noqa: E402
-from refiner.creation import (ANALYSIS, ANALYSIS_V1, ANALYSIS_V2, ANALYSIS_REVIEW,
+from refiner.creation import (ANALYSIS, ANALYSIS_V1, ANALYSIS_V2, ANALYSIS_V3, ANALYSIS_REVIEW,
                               ANALYSIS_REVIEW_V1, ANALYSIS_REVIEW_V2, analysis_markdown,
                               DRAFT_INSTRUCTION, validate_analysis, validate_analysis_review)  # noqa: E402
 from refiner.plan import (parallel_agent_plan, _source_overview, write_test_scenarios,
                           write_work_plan)  # noqa: E402
-from refiner.pipeline import (LANGUAGE_PLAN_REVIEW, PLAN_REVIEW_CASE_BOOLS, PLANNING,
+from refiner.pipeline import (HOST_SUBAGENT_TEST_REVIEW, LANGUAGE_PLAN_REVIEW,
+                              PLAN_REVIEW_CASE_BOOLS, PLANNING,
                               SELF_REVIEW_PLAN_REVIEW,
                               close_incomplete_plan_gate,
                               close_incomplete_planning_phases, initial_phase_results, make_plan,
-                              make_plan_suites, require_plan_gate, set_phase_result,
-                              validate_plan_review)  # noqa: E402
+                              make_plan_suites, require_plan_gate, set_phase_result, write_report,
+                              validate_plan_review, _apply_refine_budget_cap_migration,
+                              _criterion_coverage_repair_request, _uncovered_acceptance_criterion_ids)  # noqa: E402
 from refiner.gate import (_verify_phase_history, _verify_plan_control_artifacts,
                           _verify_plan_review_artifacts)  # noqa: E402
 from refiner.runtime import api_request, codex_output_schema, cursor_command, decode_codex_response  # noqa: E402
@@ -43,7 +47,7 @@ from refiner.artifact_validation import (all_schema_refs, schema_ref_compatible,
                                          schema_refs_compatible, validate_self_review_record,
                                          validate_skill_schema_package)  # noqa: E402
 from refiner import schemas as refiner_schemas  # noqa: E402
-from refiner.standards import AUTHORING, SELF_REVIEW_STANDARD  # noqa: E402
+from refiner.standards import (AUTHORING, HOST_SUBAGENT_TEST_RULES, SELF_REVIEW_STANDARD)  # noqa: E402
 
 
 class SelfReviewProtocolTests(unittest.TestCase):
@@ -101,7 +105,35 @@ class SkillLanguagePolicyTests(unittest.TestCase):
         self.assertIn("Simplified Chinese", LANGUAGE_PLAN_REVIEW)
 
 
+class HostSubagentTestPolicyTests(unittest.TestCase):
+    def test_planning_and_review_prefer_bounded_case_level_subagents(self):
+        policy = " ".join(HOST_SUBAGENT_TEST_RULES).lower()
+        self.assertIn("prefer host subagents", policy)
+        self.assertIn("one bounded assignment per", policy)
+        self.assertIn("pass/fail/error/not_run", policy)
+        self.assertIn("each assertion's expected and actual result", policy)
+        self.assertIn("the main controller owns result synthesis", policy)
+        self.assertIn("separate fixtures/workspaces/evidence paths", policy)
+        self.assertIn("no shared runner or judge state", policy)
+        self.assertIn("serially by default", policy)
+        self.assertIn("whole suite", policy)
+        self.assertIn("independent status and evidence record for every case", policy)
+        self.assertIn("max_parallel_agents", policy)
+        self.assertIn("host-subagent test execution policy", PLANNING.lower())
+        self.assertEqual(PLANNING.lower().count("host-subagent test execution policy"), 1)
+        self.assertIn("prefer host subagents", HOST_SUBAGENT_TEST_REVIEW.lower())
+
+
+
 class CodexWireSchemaTests(unittest.TestCase):
+    def test_json_schema_type_union_is_lowered_without_hashing_the_list(self):
+        wire = codex_output_schema({"type": ["string", "null"], "minLength": 1})
+        self.assertEqual(wire, {"anyOf": [{"type": "string"}, {"type": "null"}]})
+
+    def test_current_frozen_plan_schema_can_be_lowered_for_codex(self):
+        wire = codex_output_schema(refiner_schemas.PLAN)
+        self.assertEqual(wire["type"], "object")
+
     def test_unconstrained_and_optional_fields_round_trip(self):
         schema = {
             "type": "object", "required": ["assertion_id", "value"],
@@ -445,6 +477,7 @@ class StageSchemaContractTests(unittest.TestCase):
             "v3/plan.schema.json": ("skill-refiner.plan-v3", "v3", refiner_schemas.PLAN_V3),
             "v4/plan.schema.json": ("skill-refiner.plan-v4", "v4", refiner_schemas.PLAN_V4),
             "v5/plan.schema.json": ("skill-refiner.plan-v5", "v5", refiner_schemas.PLAN_V5),
+            "v6/plan.schema.json": ("skill-refiner.plan-v6", "v6", refiner_schemas.PLAN_V6),
             "v1/execution-plan.schema.json": ("skill-refiner.execution-plan", "v1", refiner_schemas.EXECUTION_PLAN),
             "v2/plan-review.schema.json": ("skill-refiner.plan-review-v2", "v2", refiner_schemas.PLAN_REVIEW_V2),
             "v3/plan-review.schema.json": ("skill-refiner.plan-review-v3", "v3", refiner_schemas.PLAN_REVIEW_V3),
@@ -454,6 +487,7 @@ class StageSchemaContractTests(unittest.TestCase):
             "v1/analysis.schema.json": ("skill-refiner.analysis", "v1", ANALYSIS_V1),
             "v1/analysis-review.schema.json": ("skill-refiner.analysis-review", "v1", ANALYSIS_REVIEW_V1),
             "v2/analysis.schema.json": ("skill-refiner.analysis-v2", "v2", ANALYSIS_V2),
+            "v3/analysis.schema.json": ("skill-refiner.analysis-v3", "v3", ANALYSIS_V3),
             "v2/analysis-review.schema.json": ("skill-refiner.analysis-review-v2", "v2", ANALYSIS_REVIEW_V2),
             "v1/skill-stage-contracts.schema.json": (
                 "skill-refiner.skill-stage-contracts", "v1",
@@ -876,6 +910,7 @@ def _contract_entry(case_id, **flags):
 
 def _approved_review(plan):
     return {
+        **({"revision_targets": []} if plan.get("schema_version") == "skill-refiner.plan/v7" else {}),
         "approved": True,
         "issues": [],
         "case_contracts": [_contract_entry(case["id"]) for case in plan["cases"]],
@@ -1290,7 +1325,11 @@ class PlanRevisionAndPhaseGateTests(unittest.TestCase):
         self.assertIn("dropped_frozen_matrix_entries", str(ctx.exception))
         self.assertIn("after full controls", str(ctx.exception))
         self.assertIn("dev-boundary", str(ctx.exception))
-        self.assertEqual(dropped_revision_controls["status"], "passed")
+        # Positive/negative controls passed; the revision still failed.
+        self.assertEqual(dropped_revision_controls["status"], "failed")
+        self.assertTrue(dropped_revision_controls["case_control_results"])
+        self.assertEqual(dropped_revision_controls["control_failures"], [])
+        self.assertEqual(dropped_revision_controls["coverage_failures"], [])
         self.assertTrue(dropped_revision_controls["revision_failures"])
 
     def test_skill_evaluation_is_blocked_until_all_plan_gates_pass(self):
@@ -1401,15 +1440,24 @@ class PlanMarkdownRenderingTests(unittest.TestCase):
         self.assertIn("acceptance-spec.md#A1", work_plan)
         self.assertIn("Scenario: Operator starts a valid task.", work_plan)
         self.assertIn("Expected outcome: Acceptance proof is visible.", work_plan)
+        self.assertIn("Each case is a separate acceptance item", work_plan)
+        self.assertIn("- [ ] **dev-normal (normal)**", work_plan)
+        self.assertIn("- [ ] **acc-normal (normal)**", work_plan)
+        self.assertIn("NOT_RUN, ERROR, missing evidence", work_plan)
         self.assertIn("contains; expected=token-acc-normal", work_plan)
         self.assertIn("Scenario: Operator starts a valid task.", scenarios)
         self.assertIn("Expected outcome: Acceptance proof is visible.", scenarios)
+        self.assertIn("Acceptance rule: evaluate each case independently", scenarios)
         self.assertIn("acceptance-spec.md#A1", scenarios)
         self.assertIn("contains; expected=token-acc-normal", scenarios)
         self.assertIn("Oracle rationale:", work_plan)
         self.assertIn("## Skill phase and artifact contracts", work_plan)
         self.assertIn("S-RESULT@v1", work_plan)
         self.assertIn("## Schema-validated work breakdown", work_plan)
+        self.assertIn("## Test delegation and case-level progress", work_plan)
+        self.assertIn("one bounded assignment per frozen", work_plan)
+        self.assertIn("large-task-tracking is active", work_plan)
+        self.assertIn("max_parallel_agents is not proof", work_plan)
         self.assertIn("STEP-PLAN — Freeze the test plan", work_plan)
         self.assertIn("Outputs/evidence:", work_plan)
         self.assertIn("Concurrency limit: 1 Agent(s)", work_plan)
@@ -1430,6 +1478,27 @@ class PlanMarkdownRenderingTests(unittest.TestCase):
         self.assertIn("Other dependent phases remain serial", work_plan)
         self.assertIn("Cases within one skill-up executor remain sequential", work_plan)
         self.assertIn("Serial reason: --agent-parallelism=1", serial_work_plan)
+
+
+class CaseByCaseReportingTests(unittest.TestCase):
+    def test_report_records_each_case_verdict_instead_of_only_an_aggregate(self):
+        with tempfile.TemporaryDirectory() as root:
+            work = Path(root)
+            (work / "baseline").mkdir()
+            (work / "acceptance").mkdir()
+            write_json(work / "baseline" / "summary.json", {
+                "cases": [{"id": "C01", "status": "PASS"}, {"id": "C02", "status": "NOT_RUN"}],
+            })
+            write_json(work / "acceptance" / "summary.json", {
+                "cases": [{"id": "A01", "status": "FAIL"}],
+            })
+            write_report(work, {"status": "blocked", "source": "fixture", "agent_calls": 1,
+                               "target_evaluations": 0, "elapsed_seconds": 1, "rounds": [],
+                               "limitations": [], "phase_results": {}})
+            report = (work / "report.md").read_text(encoding="utf-8")
+        self.assertIn("| C01 | PASS |", report)
+        self.assertIn("| C02 | NOT_RUN |", report)
+        self.assertIn("| A01 | FAIL |", report)
 
 
 class CreationAnalysisConclusionTests(unittest.TestCase):
@@ -1628,6 +1697,373 @@ class CreationAnalysisConclusionTests(unittest.TestCase):
             for row in analysis["scenarios"]]
         with self.assertRaisesRegex(RefinerError, "contradicts"):
             validate_analysis_review(review, analysis)
+
+
+class CriterionCoverageRepairTests(unittest.TestCase):
+    @staticmethod
+    def _plan_with_nine_existing_cases():
+        plan = _minimal_plan()
+        plan["requirements"].extend([
+            {"id": "R3", "behavior": "Handle scoped impact", "source": "requirements.md#R3",
+             "required": True, "acceptance_criteria": [
+                 {"id": "R3.A2", "statement": "Record the scoped impact.",
+                  "evidence": "The resulting record identifies the scoped impact."}]},
+            {"id": "R5", "behavior": "Preserve workflow ownership", "source": "requirements.md#R5",
+             "required": True, "acceptance_criteria": [
+                 {"id": "R5.A3", "statement": "Keep the assigned owner.",
+                  "evidence": "The output retains the assigned owner."},
+                 {"id": "R5.A4", "statement": "Report the next action.",
+                  "evidence": "The output contains the next action."}]},
+        ])
+        kinds = ["normal", "boundary", "error", "negative", "regression",
+                 "normal", "boundary", "error", "regression"]
+        plan["cases"] = [
+            _case(f"c{index}", kind, f"Operator runs c{index}.",
+                  f"c{index} produces its documented result.", f"Run c{index}.")
+            for index, kind in enumerate(kinds, 1)
+        ]
+        for step in plan["execution_plan"]["steps"]:
+            step["case_ids"] = [f"c{index}" for index in range(1, 10)]
+        return plan
+
+    @staticmethod
+    def _coverage_error(ids):
+        return PlanValidationError("acceptance criterion coverage is incomplete", {
+            "schema_version": "skill-refiner.plan-controls/v1", "status": "invalid_coverage",
+            "coverage_failures": [{
+                "field_path": "requirements[].acceptance_criteria[].case_coverage",
+                "expected_condition": "every required atomic criterion is linked to an executable case",
+                "actual_value": {"uncovered_criterion_ids": list(ids)},
+            }],
+            "case_control_results": [], "control_failures": [],
+        })
+
+    @staticmethod
+    def _corrected_plan(previous):
+        plan = copy.deepcopy(previous)
+        additions = [("c10", "R3", "R3.A2", "normal"),
+                     ("c11", "R5", "R5.A3", "boundary"),
+                     ("c12", "R5", "R5.A4", "error")]
+        previous_step = plan["execution_plan"]["steps"][-1]["id"]
+        for case_id, requirement_id, criterion_id, kind in additions:
+            case = _case(case_id, kind, f"Operator runs {criterion_id}.",
+                         f"The output proves {criterion_id}.", f"Run {case_id}.", requirement_id)
+            case["acceptance_criteria_ids"] = [criterion_id]
+            case["asset_audit"]["source_refs"] = [f"requirements.md#{requirement_id}"]
+            plan["cases"].append(case)
+            step = copy.deepcopy(plan["execution_plan"]["steps"][-1])
+            step.update({
+                "id": f"STEP-{case_id.upper()}", "order": len(plan["execution_plan"]["steps"]) + 1,
+                "title": f"Run {criterion_id} control", "goal": f"Verify {criterion_id} with its new case.",
+                "actions": [f"Execute {case_id} and inspect its observable result for {criterion_id}."],
+                "outputs": [{"path": f"evidence/{case_id}.json", "schema_id": "S-RESULT",
+                             "schema_version": "v1", "evidence": f"The executed {case_id} result."}],
+                "requirement_ids": [requirement_id], "case_ids": [case_id],
+                "depends_on": [previous_step],
+            })
+            step["agent"]["scope"] = f"Run and capture the {case_id} evidence only."
+            plan["execution_plan"]["steps"].append(step)
+            previous_step = step["id"]
+        return plan
+
+    def test_missing_atomic_ids_are_given_deterministic_case_repairs_and_corrected_matrix_passes(self):
+        incomplete = self._plan_with_nine_existing_cases()
+        corrected = self._corrected_plan(incomplete)
+        expected_ids = ["R3.A2", "R5.A3", "R5.A4"]
+        self.assertEqual(_uncovered_acceptance_criterion_ids(self._coverage_error(expected_ids).evidence), expected_ids)
+
+        class Agent:
+            def __init__(self, work):
+                self.work = Path(work)
+                self.plan_calls = 0
+                self.repair_request = None
+
+            def ask(self, role, instruction, payload, schema):
+                if role == "plan":
+                    self.plan_calls += 1
+                    if self.plan_calls == 1:
+                        return incomplete
+                    self.repair_request = payload.get("required_criterion_coverage_repair")
+                    return corrected
+                review = _approved_review(corrected)
+                review["recovery_assessments"] = [
+                    {"change_id": f"execution-add:STEP-C{number}", "preserves_requirements": True,
+                     "reason": "The new step and case directly cover the frozen criterion without changing prior requirements."}
+                    for number in (10, 11, 12)
+                ] + [
+                    {"change_id": f"execution-add-case:c{number}", "preserves_requirements": True,
+                     "reason": "The new case is directly linked to its frozen atomic criterion."}
+                    for number in (10, 11, 12)
+                ]
+                return review
+
+        phases = []
+        with tempfile.TemporaryDirectory() as root, patch(
+                "refiner.pipeline.validate_plan",
+                side_effect=[self._coverage_error(expected_ids), {"case_control_results": []}]) as validator:
+            agent = Agent(root)
+            accepted = make_plan(agent, {}, root, 12, max_attempts=2,
+                                 phase_callback=lambda name, status, **detail:
+                                 phases.append((name, status, detail.get("reason"))))
+            attempt = read_json(Path(root) / "plan-controls" / "attempts" / "development-01.json")
+
+        self.assertEqual(accepted["cases"][-3:], corrected["cases"][-3:])
+        self.assertEqual(agent.plan_calls, 2)
+        self.assertEqual(validator.call_count, 2)
+        self.assertEqual(agent.repair_request["uncovered_criterion_ids"], expected_ids)
+        self.assertEqual([row["suggested_case_id"] for row in agent.repair_request["required_case_repairs"]],
+                         ["c10", "c11", "c12"])
+        self.assertEqual(attempt["criterion_coverage_ids"], expected_ids)
+        self.assertFalse(attempt["criterion_coverage_repair_applied"])
+        self.assertIn(("plan_self_check", "passed", None), phases)
+
+    def test_repeated_uncovered_fingerprint_stops_before_third_plan_call(self):
+        incomplete = self._plan_with_nine_existing_cases()
+        ids = ["R3.A2", "R5.A3", "R5.A4"]
+
+        class Agent:
+            def __init__(self, work):
+                self.work = Path(work)
+                self.plan_calls = 0
+
+            def ask(self, role, instruction, payload, schema):
+                if role == "plan":
+                    self.plan_calls += 1
+                    return incomplete
+                raise AssertionError("Repeated plan coverage must stop before independent review")
+
+        phases = []
+        with tempfile.TemporaryDirectory() as root, patch(
+                "refiner.pipeline.validate_plan",
+                side_effect=[self._coverage_error(ids), self._coverage_error(ids), self._coverage_error(ids)]):
+            agent = Agent(root)
+            with self.assertRaisesRegex(PlanGateError, "PLAN_NOT_PASSED.*R3.A2.*R5.A3.*R5.A4"):
+                make_plan(agent, {}, root, 12, max_attempts=3,
+                          phase_callback=lambda name, status, **detail:
+                          phases.append((name, status, detail.get("reason"))))
+            repeated_attempt = read_json(Path(root) / "plan-controls" / "attempts" / "development-02.json")
+
+        self.assertEqual(agent.plan_calls, 2)
+        self.assertEqual(repeated_attempt["criterion_coverage_ids"], ids)
+        self.assertTrue(repeated_attempt["criterion_coverage_repair_applied"])
+        self.assertIn(("plan_gate", "not_passed", "repeated_criterion_coverage_failure"), phases)
+
+    def test_authenticated_resume_history_with_repeated_repair_stops_before_any_new_agent_call(self):
+        plan = self._plan_with_nine_existing_cases()
+        ids = ["R3.A2", "R5.A3", "R5.A4"]
+        record = self._coverage_error(ids).evidence
+        record.update({"attempt": 2, "plan_snapshot": plan, "plan_sha256": digest(plan),
+                       "criterion_coverage_ids": ids, "criterion_coverage_repair_applied": True})
+
+        class Agent:
+            def __init__(self, work):
+                self.work = Path(work)
+                self.calls = 0
+
+            def ask(self, *args, **kwargs):
+                self.calls += 1
+                raise AssertionError("Authenticated repeated coverage history must stop before another call")
+
+        phases = []
+        recovery = {"control_records": [record]}
+        recovered_material = {"feedback": [], "sources": [], "case_ids": [], "execution_revision": [],
+                              "reference": {**recovery, "previous_plan": plan}}
+        with tempfile.TemporaryDirectory() as root, \
+                patch("refiner.pipeline.verified_response_sources", return_value=({}, [])), \
+                patch("refiner.pipeline._recovery_feedback_material", return_value=recovered_material):
+            agent = Agent(root)
+            with self.assertRaisesRegex(PlanGateError, "authenticated history.*stopped before another plan-agent call"):
+                make_plan(agent, {"_response_contract_v7": True}, root, 12, max_attempts=2,
+                          phase_callback=lambda name, status, **detail:
+                          phases.append((name, status, detail.get("reason"))), recovery=recovery)
+
+        self.assertEqual(agent.calls, 0)
+        self.assertIn(("plan_gate", "not_passed", "repeated_criterion_coverage_failure"), phases)
+
+    def test_ordinary_resume_uses_local_control_to_make_one_repair_and_pass(self):
+        incomplete = self._plan_with_nine_existing_cases()
+        corrected = self._corrected_plan(incomplete)
+        ids = ["R3.A2", "R5.A3", "R5.A4"]
+
+        class FirstAgent:
+            def __init__(self, work):
+                self.work = Path(work)
+                self.calls = 0
+
+            def ask(self, role, instruction, payload, schema):
+                self.calls += 1
+                return incomplete
+
+        class ResumedAgent:
+            def __init__(self, work):
+                self.work = Path(work)
+                self.calls = 0
+                self.repair = None
+
+            def ask(self, role, instruction, payload, schema):
+                if role == "plan":
+                    self.calls += 1
+                    self.repair = payload.get("required_criterion_coverage_repair")
+                    return corrected
+                review = _approved_review(corrected)
+                review["recovery_assessments"] = [
+                    {"change_id": f"execution-add:STEP-C{number}", "preserves_requirements": True,
+                     "reason": "The new step and case directly cover the frozen criterion without changing prior requirements."}
+                    for number in (10, 11, 12)
+                ] + [
+                    {"change_id": f"execution-add-case:c{number}", "preserves_requirements": True,
+                     "reason": "The new case is directly linked to its frozen atomic criterion."}
+                    for number in (10, 11, 12)
+                ]
+                return review
+
+        with tempfile.TemporaryDirectory() as root:
+            with patch("refiner.pipeline.validate_plan", side_effect=[self._coverage_error(ids)]):
+                with self.assertRaises(PlanGateError):
+                    make_plan(FirstAgent(root), {}, root, 12, max_attempts=1)
+            with patch("refiner.pipeline.validate_plan", return_value={"case_control_results": []}) as validator:
+                resumed = ResumedAgent(root)
+                accepted = make_plan(resumed, {}, root, 12, max_attempts=2)
+
+            self.assertEqual(resumed.calls, 1)
+            self.assertEqual(validator.call_count, 1)
+            self.assertEqual(resumed.repair["uncovered_criterion_ids"], ids)
+            self.assertEqual(accepted["cases"][-3:], corrected["cases"][-3:])
+            attempt_numbers = sorted(int(path.stem.rsplit("-", 1)[1])
+                                     for path in (Path(root) / "plan-controls" / "attempts").glob("development-*.json"))
+            self.assertEqual(attempt_numbers, [1, 2])
+
+    def test_ordinary_resume_blocks_after_a_structured_repair_repeats_same_gap(self):
+        incomplete = self._plan_with_nine_existing_cases()
+        ids = ["R3.A2", "R5.A3", "R5.A4"]
+
+        class Agent:
+            def __init__(self, work):
+                self.work = Path(work)
+                self.calls = 0
+
+            def ask(self, role, instruction, payload, schema):
+                self.calls += 1
+                return incomplete
+
+        with tempfile.TemporaryDirectory() as root:
+            with patch("refiner.pipeline.validate_plan",
+                       side_effect=[self._coverage_error(ids), self._coverage_error(ids)]):
+                with self.assertRaisesRegex(PlanGateError, "PLAN_NOT_PASSED"):
+                    make_plan(Agent(root), {}, root, 12, max_attempts=2)
+            resumed = Agent(root)
+            with self.assertRaisesRegex(PlanGateError, "authenticated history.*stopped before another plan-agent call"):
+                make_plan(resumed, {}, root, 12, max_attempts=2)
+
+        self.assertEqual(resumed.calls, 0)
+
+
+class RefineBudgetCapMigrationTests(unittest.TestCase):
+    @staticmethod
+    def _write_fixture(root, *, state_overrides=None, approval_overrides=None):
+        root = Path(root) / "refine-continuation"
+        root.mkdir(parents=True)
+        state = {
+            "status": "plan_not_passed", "workspace": str(root.resolve()),
+            "phase_results": {"plan_gate": {"status": "not_passed"}},
+            "target_evaluations": 0, "evaluation_history": [], "active_evaluation": None,
+            "agent_calls": 27, "elapsed_seconds": 2453.82,
+        }
+        state.update(state_overrides or {})
+        contract = {"schema_version": "skill-refiner.resume/v1",
+                    "limits": {"max_agent_calls": 47, "max_seconds": 7200, "max_evaluations": 120},
+                    "execution_sha256": "a" * 64}
+        state_path, contract_path = root / "state.json", root / "resume-contract.json"
+        state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        contract_path.write_text(json.dumps(contract, ensure_ascii=False), encoding="utf-8")
+
+        approval = {
+            "schema_version": "goalexecutor.budget-approval/v1", "approval_id": "APR-GE-001",
+            "decision": "approved_limited_extension",
+            "scope": "Continue the existing create and refine run lineages without resetting or rerunning completed stages.",
+            "caps": {"refine": {"cumulative_max_agent_calls": 47,
+                                 "cumulative_max_seconds": 7200, "max_target_evaluations": 24}},
+            "prior_usage": {"refine": {"agent_calls": 27, "seconds_approx": 2453.82,
+                                        "target_evaluations": 0}},
+            "remaining": {"refine": {"agent_calls": 20, "seconds_approx": 4746.18,
+                                      "target_evaluations": 24}},
+            "constraints": ["Do not reset counters or rewrite historical records."],
+        }
+        approval.update(approval_overrides or {})
+        approval_path = Path(root).parent / ".tasks" / "artifacts" / "GE-test" / "art_067.json"
+        approval_path.parent.mkdir(parents=True, exist_ok=True)
+        approval_path.write_text(json.dumps(approval, ensure_ascii=False), encoding="utf-8")
+        sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        migration = {
+            "schema_version": "skill-refiner.refine-budget-cap-migration/v1",
+            "approval_id": "APR-GE-001", "source_run": str(root.resolve()), "lineage_id": root.name,
+            "source_state_sha256": sha(state_path), "source_resume_contract_sha256": sha(contract_path),
+            "approved_limits": {"max_agent_calls": 47, "max_seconds": 7200, "max_evaluations": 24},
+            "approval_artifact_path": str(approval_path.resolve()),
+            "approval_artifact_sha256": sha(approval_path),
+        }
+        (root / "refine-budget-cap-migration.json").write_text(
+            json.dumps(migration, ensure_ascii=False), encoding="utf-8")
+        return root, state, contract, migration, approval_path
+
+    def test_approved_zero_evaluation_migration_preserves_historical_limit_and_binds_artifacts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root, state, contract, migration, approval_path = self._write_fixture(temporary)
+            requested = {"max_agent_calls": 47, "max_seconds": 7200, "max_evaluations": 24}
+            with patch("refiner.pipeline._evaluation_accounting",
+                       return_value={"total_cost": 0, "unresolved_attempts": []}):
+                changed = _apply_refine_budget_cap_migration(root, contract, state, requested)
+            self.assertTrue(changed)
+            self.assertEqual(contract["limits"]["max_evaluations"], 120)
+            self.assertEqual(contract["effective_limits"], requested)
+            self.assertEqual(hashlib.sha256(approval_path.read_bytes()).hexdigest(),
+                             migration["approval_artifact_sha256"])
+            self.assertEqual((root / "resume-history" / "budget-cap-source-state.json").read_bytes(),
+                             (root / "state.json").read_bytes())
+            self.assertEqual((root / "resume-history" / "budget-cap-source-resume-contract.json").read_bytes(),
+                             (root / "resume-contract.json").read_bytes())
+            (root / "resume-contract.json").write_text(json.dumps(contract, ensure_ascii=False),
+                                                       encoding="utf-8")
+            resumed_state = {**state, "status": "resuming", "target_evaluations": 1,
+                             "evaluation_history": [{"status": "completed"}]}
+            with patch("refiner.pipeline._evaluation_accounting",
+                       return_value={"total_cost": 0, "unresolved_attempts": []}):
+                self.assertTrue(_apply_refine_budget_cap_migration(root, contract, resumed_state, requested))
+            self.assertEqual(contract["limits"]["max_evaluations"], 120)
+            self.assertEqual(contract["effective_limits"], requested)
+
+    def test_migration_rejects_missing_approval_or_any_started_evaluation(self):
+        requested = {"max_agent_calls": 47, "max_seconds": 7200, "max_evaluations": 24}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "no-approval"
+            root.mkdir()
+            contract = {"limits": {"max_agent_calls": 47, "max_seconds": 7200, "max_evaluations": 120}}
+            with self.assertRaisesRegex(RefinerError, "without a bound user-approved migration"):
+                _apply_refine_budget_cap_migration(root, contract, {"target_evaluations": 0}, requested)
+
+        for state_override in ({"target_evaluations": 1, "evaluation_history": [{"status": "completed"}]},
+                               {"status": "complete", "target_evaluations": 0},
+                               {"phase_results": {"plan_gate": {"status": "passed"}}}):
+            with self.subTest(state_override=state_override), tempfile.TemporaryDirectory() as temporary:
+                root, state, contract, _, _ = self._write_fixture(temporary, state_overrides=state_override)
+                with patch("refiner.pipeline._evaluation_accounting",
+                           return_value={"total_cost": 0, "unresolved_attempts": []}):
+                    with self.assertRaisesRegex(RefinerError, "same plan_not_passed, zero-evaluation run"):
+                        _apply_refine_budget_cap_migration(root, contract, state, requested)
+
+    def test_migration_rejects_a_changed_hashed_old_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root, state, contract, _, _ = self._write_fixture(temporary)
+            contract_path = root / "resume-contract.json"
+            contract_path.write_text(json.dumps({**contract, "limits": {**contract["limits"],
+                                                                           "max_evaluations": 99}}),
+                                     encoding="utf-8")
+            with patch("refiner.pipeline._evaluation_accounting",
+                       return_value={"total_cost": 0, "unresolved_attempts": []}):
+                with self.assertRaisesRegex(RefinerError, "hashed source file|contract hash mismatch"):
+                    _apply_refine_budget_cap_migration(root, contract, state,
+                                                       {"max_agent_calls": 47, "max_seconds": 7200,
+                                                        "max_evaluations": 24})
 
 
 if __name__ == "__main__":

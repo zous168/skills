@@ -28,7 +28,7 @@
       "type": "object",
       "required": ["kind"],
       "properties": {
-        "kind": {"enum": ["command", "fake", "deepseek"]},
+        "kind": {"enum": ["command", "fake", "deepseek", "cursor_sdk"]},
         "argv": {"type": "array", "items": {"type": "string"}},
         "model": {"type": ["string", "null"]},
         "args": {"type": "array", "items": {"type": "string"}},
@@ -43,7 +43,8 @@
       "allOf": [
         {"if": {"properties": {"kind": {"const": "command"}}}, "then": {"required": ["argv"]}},
         {"if": {"properties": {"kind": {"const": "fake"}}}, "then": {"required": ["fixture"]}},
-        {"if": {"properties": {"kind": {"const": "deepseek"}}}, "then": {"required": ["model", "credential_env", "base_url"]}}
+        {"if": {"properties": {"kind": {"const": "deepseek"}}}, "then": {"required": ["model", "credential_env", "base_url"]}},
+        {"if": {"properties": {"kind": {"const": "cursor_sdk"}}}, "then": {"required": ["model", "credential_env"]}}
       ]
     }
   }

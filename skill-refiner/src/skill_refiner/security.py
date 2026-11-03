@@ -15,6 +15,8 @@ TEXT_SUFFIXES = {
     ".cfg", ".sh", ".ps1", ".cmd", ".bat", ".js", ".ts", ".tsx", ".jsx",
     ".html", ".css", ".svg", ".csv", ".xml",
 }
+TRANSIENT_CACHE_DIRS = {".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", "__pycache__"}
+TRANSIENT_FILE_SUFFIXES = {".pyc", ".pyo"}
 PROTECTED_PREFIXES = (".refiner/", ".git/", ".runs/", "run/")
 WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 SECRET_PATTERNS = [
@@ -66,7 +68,12 @@ def ensure_safe_tree(root: Path) -> None:
     for path in root.rglob("*"):
         if _is_reparse_point(path):
             raise InputError(f"links and reparse points are forbidden: {path}")
+        relative = path.relative_to(root)
+        if any(part in TRANSIENT_CACHE_DIRS for part in relative.parts):
+            continue
         if path.is_file():
+            if path.suffix.lower() in TRANSIENT_FILE_SUFFIXES:
+                continue
             if path.suffix.lower() not in TEXT_SUFFIXES:
                 raise InputError(f"binary or unsupported file type: {path}")
             try:
@@ -79,8 +86,11 @@ def tree_manifest(root: Path) -> dict[str, str]:
     ensure_safe_tree(root)
     result: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
-        if path.is_file():
-            result[path.relative_to(root).as_posix()] = digest_file(path)
+        relative = path.relative_to(root)
+        if any(part in TRANSIENT_CACHE_DIRS for part in relative.parts):
+            continue
+        if path.is_file() and path.suffix.lower() not in TRANSIENT_FILE_SUFFIXES:
+            result[relative.as_posix()] = digest_file(path)
     return result
 
 

@@ -12,6 +12,7 @@ from .hashing import read_json, write_json
 from .kernel import RefinerControlKernel
 from .models import RunMode, RunResult, RunStatus
 from .security import safe_copy_tree, tree_manifest
+from .self_architecture import self_architecture_report
 from .workflow import PipelineRun, build_adk_workflow, run_adk_workflow, run_builtin_workflow
 
 
@@ -140,6 +141,11 @@ def doctor(config: Path | None = None) -> dict[str, Any]:
     except Exception as exc:
         checks["adk_graph"] = f"error: {exc}"
         raise EnvironmentError("ADK runtime check failed", details=checks) from exc
+    try:
+        checks["self_architecture"] = self_architecture_report()
+    except Exception as exc:
+        checks["self_architecture"] = {"status": "error", "message": str(exc)}
+        raise EnvironmentError("self-architecture check failed", details=checks) from exc
     if config is not None:
         from .models import RefinerConfig
         import json

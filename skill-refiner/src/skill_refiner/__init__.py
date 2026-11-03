@@ -2,6 +2,7 @@
 
 from .kernel import RefinerControlKernel
 from .models import RefinerConfig, RunResult
+from .self_architecture import self_architecture_report
 from .service import adopt_run, create_run, refine_run, resume_run, verify_run
 from .workflow import build_adk_workflow
 
@@ -14,6 +15,7 @@ __all__ = [
     "create_run",
     "refine_run",
     "resume_run",
+    "self_architecture_report",
     "verify_run",
 ]
 

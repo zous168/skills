@@ -26,3 +26,18 @@ a direct-argv local process, `deepseek` calls the schema-constrained DeepSeek
 Responses API, and `fake` is limited to deterministic fixtures. Provider
 responses remain proposals; only Kernel-owned process evidence and assertions
 can produce a verified verdict.
+
+## Self-architecture contract
+
+The Agent Skill wrapper and standalone package are two entry points into the
+same implementation. `doctor` deterministically verifies their shared
+`skill-refiner` identity, console entry point, fixed fourteen-stage registry,
+controller contract hash, complete packaged-Schema set and hashes, implemented
+adapter kinds, required runtime files, and the absence of retired identifiers.
+It reports a stable `contract_sha256` and fails closed on any mismatch.
+
+Transient interpreter and test caches are never architecture inputs.
+`ensure_safe_tree`, `tree_manifest`, and `safe_copy_tree` consistently exclude
+`__pycache__`, `.pytest_cache`, other named tool caches, and compiled Python
+cache files while still rejecting links, reparse points, unsupported binaries,
+and non-UTF-8 source files.

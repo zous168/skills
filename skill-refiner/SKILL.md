@@ -30,6 +30,12 @@ path. Run `doctor` before starting a workflow.
 Never edit frozen inputs, plan evidence, or test evidence inside a run. Resume
 with `resume <run-dir>` after repairing an external adapter or environment.
 
+`doctor` also enforces this Skill's self-architecture contract: Agent Skill and
+standalone identities, the fixed fourteen-stage registry, controller and Schema
+hashes, adapter-kind parity, required runtime files, and retired-identifier
+absence. Standard Python and test caches are excluded from source manifests and
+copies, so running the Skill cannot make a later self-refinement unsafe.
+
 See [references/architecture.md](references/architecture.md) for trust
 boundaries and [references/adapters.md](references/adapters.md) for the
 adapter envelope. See [references/persistence.md](references/persistence.md)

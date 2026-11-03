@@ -13,6 +13,11 @@ skill-refiner adopt .runs/run-xxxxxxxxxxxx ../my-skill
 
 生产配置使用 `runtime_driver: adk`。离线测试显式使用 `builtin_test`，两者调用同一 Control Kernel 和节点实现。
 
+`doctor` 同时执行确定性的 self-architecture 检查：核对 Agent Skill 与独立
+CLI 的 `skill-refiner` 身份、固定 fourteen-stage 注册表、控制器与全部打包
+Schema 的哈希、适配器类型一致性、必需运行时文件，以及退役标识是否为零。
+报告包含稳定的 `contract_sha256`，任何契约漂移都会失败关闭。
+
 每个阶段持久化 `input.json`、`output.json` 和 `envelope.json`。顶层
 `stages.json` 是实时索引，`contracts/stages.json` 是冻结契约；恢复和最终
 验证会重新检查 Schema 哈希、内容哈希、SQLite 状态和全部历史 attempt。

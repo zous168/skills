@@ -1,0 +1,55 @@
+{
+  "schema_version": "skill-refiner.config/v1",
+  "runtime_driver": "adk",
+  "budgets": {
+    "max_seconds": 1800,
+    "max_agent_calls": 24,
+    "max_evaluations": 40,
+    "max_repair_rounds": 2,
+    "per_call_timeout": 300,
+    "concurrency": 1
+  },
+  "roles": {
+    "planner": {
+      "kind": "deepseek",
+      "model": "deepseek-v4-pro",
+      "base_url": "https://api.deepseek.com",
+      "credential_env": ["DEEPSEEK_API_KEY"],
+      "timeout": 300,
+      "max_retries": 2
+    },
+    "author": {
+      "kind": "deepseek",
+      "model": "deepseek-v4-pro",
+      "base_url": "https://api.deepseek.com",
+      "credential_env": ["DEEPSEEK_API_KEY"],
+      "timeout": 300,
+      "max_retries": 2
+    },
+    "repair": {
+      "kind": "deepseek",
+      "model": "deepseek-v4-pro",
+      "base_url": "https://api.deepseek.com",
+      "credential_env": ["DEEPSEEK_API_KEY"],
+      "timeout": 300,
+      "max_retries": 2
+    },
+    "reviewer": {
+      "kind": "deepseek",
+      "model": "deepseek-v4-pro",
+      "base_url": "https://api.deepseek.com",
+      "credential_env": ["DEEPSEEK_API_KEY"],
+      "timeout": 300,
+      "max_retries": 2
+    },
+    "evaluator": {
+      "kind": "deepseek",
+      "model": "deepseek-v4-pro",
+      "base_url": "https://api.deepseek.com",
+      "credential_env": ["DEEPSEEK_API_KEY"],
+      "timeout": 300,
+      "max_retries": 2
+    }
+  },
+  "executors": {}
+}

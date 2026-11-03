@@ -1,7 +1,0 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "skill-refiner.utf8-text",
-  "type": "string",
-  "contentEncoding": "utf-8",
-  "x-schema-version": "v1"
-}

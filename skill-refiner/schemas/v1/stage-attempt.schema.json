@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.stage-attempt/v1",
+  "type": "object",
+  "required": ["schema_version", "run_id", "stage_id", "attempt", "status", "input", "output", "budget_before", "budget_after", "started_at", "finished_at", "error"],
+  "properties": {
+    "schema_version": {"const": "skill-refiner.stage-attempt/v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "stage_id": {"type": "string", "minLength": 1},
+    "attempt": {"type": "integer", "minimum": 1},
+    "status": {"enum": ["passed", "failed"]},
+    "input": {"$ref": "#/$defs/artifact"},
+    "output": {"oneOf": [{"$ref": "#/$defs/artifact"}, {"type": "null"}]},
+    "budget_before": {"$ref": "#/$defs/budget"},
+    "budget_after": {"$ref": "#/$defs/budget"},
+    "started_at": {"type": "string"},
+    "finished_at": {"type": "string"},
+    "error": {"oneOf": [{"$ref": "#/$defs/error"}, {"type": "null"}]}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["logical_path", "schema_id", "schema_version", "schema_path", "schema_sha256", "content_sha256", "byte_count", "media_type", "validation_result"],
+      "properties": {
+        "logical_path": {"type": "string"}, "schema_id": {"type": "string"}, "schema_version": {"const": 1},
+        "schema_path": {"type": "string"}, "schema_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "byte_count": {"type": "integer", "minimum": 0},
+        "media_type": {"const": "application/json"}, "validation_result": {"const": "passed"}
+      },
+      "additionalProperties": false
+    },
+    "budget": {
+      "type": "object",
+      "required": ["elapsed_seconds", "agent_calls", "evaluations", "repair_rounds"],
+      "properties": {
+        "elapsed_seconds": {"type": "number", "minimum": 0}, "agent_calls": {"type": "integer", "minimum": 0},
+        "evaluations": {"type": "integer", "minimum": 0}, "repair_rounds": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object", "required": ["code", "message", "recoverable"],
+      "properties": {"code": {"type": "string"}, "message": {"type": "string"}, "recoverable": {"type": "boolean"}},
+      "additionalProperties": false
+    }
+  }
+}

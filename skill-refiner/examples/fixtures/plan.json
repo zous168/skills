@@ -1,0 +1,40 @@
+{
+  "requirements": [
+    {"id": "R-greet", "text": "Greet a supplied name"},
+    {"id": "R-missing", "text": "Fail when a name is missing"}
+  ],
+  "development_cases": [
+    {
+      "id": "C-dev-greet",
+      "kind": "normal",
+      "requirement_ids": ["R-greet"],
+      "argv": ["{python}", "scripts/hello.py", "Alice"],
+      "assertions": [
+        {"id": "A-dev-exit", "kind": "exit_code", "expected": 0},
+        {"id": "A-dev-text", "kind": "stdout_contains", "expected": "Hello, Alice!"}
+      ]
+    },
+    {
+      "id": "C-dev-missing",
+      "kind": "error",
+      "requirement_ids": ["R-missing"],
+      "argv": ["{python}", "scripts/hello.py"],
+      "assertions": [
+        {"id": "A-missing-exit", "kind": "exit_code", "expected": 2},
+        {"id": "A-missing-text", "kind": "stdout_contains", "expected": "usage: hello.py NAME"}
+      ]
+    }
+  ],
+  "acceptance_cases": [
+    {
+      "id": "C-accept-held-out",
+      "kind": "acceptance",
+      "requirement_ids": ["R-greet"],
+      "argv": ["{python}", "scripts/hello.py", "Bob"],
+      "assertions": [
+        {"id": "A-accept-exit", "kind": "exit_code", "expected": 0},
+        {"id": "A-accept-text", "kind": "stdout_contains", "expected": "Hello, Bob!"}
+      ]
+    }
+  ]
+}

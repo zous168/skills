@@ -1,0 +1,6 @@
+{
+  "requirements": [
+    {"id": "R-greet", "text": "Greet a supplied name"},
+    {"id": "R-missing", "text": "Fail when a name is missing"}
+  ]
+}

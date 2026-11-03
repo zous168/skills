@@ -1,0 +1,13 @@
+{
+  "schema_version": "skill-refiner.config/v1",
+  "runtime_driver": "adk",
+  "budgets": {"max_seconds": 120, "max_agent_calls": 10, "max_evaluations": 10, "max_repair_rounds": 1, "per_call_timeout": 30, "concurrency": 1},
+  "roles": {
+    "planner": {"kind": "fake", "fixture": "fixtures/planner.json"},
+    "author": {"kind": "fake", "fixture": "fixtures/author.json"},
+    "repair": {"kind": "fake", "fixture": "fixtures/author.json"},
+    "reviewer": {"kind": "fake", "fixture": "fixtures/review.json"},
+    "evaluator": {"kind": "fake", "fixture": "fixtures/review.json"}
+  },
+  "executors": {}
+}

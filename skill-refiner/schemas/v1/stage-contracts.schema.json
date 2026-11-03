@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.stage-contracts/v1",
+  "type": "object",
+  "required": ["schema_version", "stages"],
+  "properties": {
+    "schema_version": {"const": "skill-refiner.stage-contracts/v1"},
+    "stages": {
+      "type": "array",
+      "minItems": 14,
+      "maxItems": 14,
+      "items": {
+        "type": "object",
+        "required": ["stage_id", "ordinal", "input_schema_id", "output_schema_id", "schema_version", "schema_path", "validator_id", "validation_points", "failure_states", "resume_policy"],
+        "properties": {
+          "stage_id": {"type": "string"},
+          "ordinal": {"type": "integer", "minimum": 1},
+          "input_schema_id": {"type": "string"},
+          "output_schema_id": {"type": "string"},
+          "schema_version": {"const": 1},
+          "schema_path": {"const": "schemas/v1/stage-artifacts.schema.json"},
+          "validator_id": {"type": "string"},
+          "validation_points": {"type": "array", "items": {"enum": ["generation", "handoff", "resume", "final_verify"]}, "uniqueItems": true},
+          "failure_states": {"type": "array", "items": {"type": "string"}},
+          "resume_policy": {"const": "reuse_if_valid_else_block"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

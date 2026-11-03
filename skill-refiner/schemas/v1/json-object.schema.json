@@ -1,7 +1,0 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "skill-refiner.json-object",
-  "type": "object",
-  "description": "Stage JSON artifact; domain-specific schemas are applied by its stage gate.",
-  "x-schema-version": "v1"
-}

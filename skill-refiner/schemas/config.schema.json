@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.config/v1",
+  "type": "object",
+  "required": ["schema_version", "runtime_driver", "roles", "executors"],
+  "properties": {
+    "schema_version": {"const": "skill-refiner.config/v1"},
+    "runtime_driver": {"enum": ["adk", "builtin_test"]},
+    "budgets": {"type": "object"},
+    "roles": {
+      "type": "object",
+      "required": ["planner", "author", "repair", "reviewer", "evaluator"],
+      "properties": {
+        "planner": {"$ref": "#/$defs/adapterProfile"},
+        "author": {"$ref": "#/$defs/adapterProfile"},
+        "repair": {"$ref": "#/$defs/adapterProfile"},
+        "reviewer": {"$ref": "#/$defs/adapterProfile"},
+        "evaluator": {"$ref": "#/$defs/adapterProfile"}
+      },
+      "additionalProperties": {"$ref": "#/$defs/adapterProfile"}
+    },
+    "executors": {"type": "object", "additionalProperties": {"$ref": "#/$defs/adapterProfile"}},
+    "allowed_environment": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "adapterProfile": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["command", "fake", "deepseek"]},
+        "argv": {"type": "array", "items": {"type": "string"}},
+        "model": {"type": ["string", "null"]},
+        "args": {"type": "array", "items": {"type": "string"}},
+        "credential_env": {"type": "array", "items": {"type": "string"}},
+        "timeout": {"type": ["integer", "null"], "minimum": 1},
+        "max_output_bytes": {"type": "integer", "minimum": 1024},
+        "fixture": {"type": ["string", "null"]},
+        "base_url": {"type": "string"},
+        "max_retries": {"type": "integer", "minimum": 0, "maximum": 3}
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "command"}}}, "then": {"required": ["argv"]}},
+        {"if": {"properties": {"kind": {"const": "fake"}}}, "then": {"required": ["fixture"]}},
+        {"if": {"properties": {"kind": {"const": "deepseek"}}}, "then": {"required": ["model", "credential_env", "base_url"]}}
+      ]
+    }
+  }
+}

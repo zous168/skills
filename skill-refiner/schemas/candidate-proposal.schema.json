@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.candidate-proposal/v1",
+  "type": "object",
+  "required": ["schema_version", "plan_sha256", "changes", "summary"],
+  "properties": {
+    "schema_version": {"const": "skill-refiner.candidate-proposal/v1"},
+    "plan_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "changes": {"type": "array"},
+    "summary": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false
+}

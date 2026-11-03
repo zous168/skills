@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "skill-refiner.stage-artifacts/v1",
+  "$comment": "The stage contract selects exactly one definition and the matching Pydantic validator by stable stage ID.",
+  "$defs": {
+    "stage_input": {
+      "type": "object",
+      "required": ["schema_version", "stage_id", "dependencies", "parameters"],
+      "properties": {
+        "schema_version": {"const": "skill-refiner.stage-input/v1"},
+        "stage_id": {"type": "string"},
+        "dependencies": {"type": "array", "items": {"type": "object", "required": ["artifact", "sha256"], "properties": {"artifact": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, "additionalProperties": false}},
+        "parameters": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "freeze_inputs_output": {"type": "object", "required": ["frozen", "stages"], "properties": {"frozen": {"type": "object", "additionalProperties": {"type": "string"}}, "stages": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": false},
+    "analysis_output": {"type": "object", "required": ["requirements"], "properties": {"requirements": {"type": "array", "items": {"type": "object"}}}, "additionalProperties": false},
+    "frozen_plan_output": {"type": "object", "required": ["schema_version", "requirements_sha256", "config_sha256", "requirements", "development_cases", "acceptance_cases", "stage_contracts"], "properties": {"schema_version": {"const": "skill-refiner.plan/v1"}, "requirements_sha256": {"type": "string"}, "config_sha256": {"type": "string"}, "requirements": {"type": "array"}, "development_cases": {"type": "array"}, "acceptance_cases": {"type": "array"}, "stage_contracts": {"type": "array"}}, "additionalProperties": false},
+    "review_output": {"type": "object", "required": ["approved", "issues"], "properties": {"approved": {"type": "boolean"}, "issues": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": false},
+    "plan_gate_output": {"type": "object", "required": ["approved", "plan_only"], "properties": {"approved": {"type": "boolean"}, "plan_only": {"type": "boolean"}}, "additionalProperties": false},
+    "baseline_output": {"type": "object", "required": ["applicable", "manifest"], "properties": {"applicable": {"type": "boolean"}, "manifest": {"type": "object", "additionalProperties": {"type": "string"}}}, "additionalProperties": false},
+    "candidate_output": {"type": "object", "required": ["summary", "applied", "manifest"], "properties": {"summary": {"type": "string"}, "applied": {"type": "array", "items": {"type": "string"}}, "manifest": {"type": "object", "additionalProperties": {"type": "string"}}}, "additionalProperties": false},
+    "static_validation_output": {"type": "object", "required": ["frontmatter", "manifest"], "properties": {"frontmatter": {"type": "object"}, "manifest": {"type": "object", "additionalProperties": {"type": "string"}}}, "additionalProperties": false},
+    "case_result": {"type": "object", "required": ["case_id", "passed", "failures", "argv", "exit_code", "timed_out", "stdout", "stderr", "duration_seconds"], "properties": {"case_id": {"type": "string"}, "passed": {"type": "boolean"}, "failures": {"type": "array", "items": {"type": "string"}}, "argv": {"type": "array", "items": {"type": "string"}}, "exit_code": {"type": ["integer", "null"]}, "timed_out": {"type": "boolean"}, "stdout": {"type": "string"}, "stderr": {"type": "string"}, "duration_seconds": {"type": "number", "minimum": 0}}, "additionalProperties": false},
+    "evaluation_report": {"type": "object", "required": ["phase", "passed", "results"], "properties": {"phase": {"enum": ["development", "regression", "acceptance"]}, "passed": {"type": "boolean"}, "results": {"type": "array", "items": {"$ref": "#/$defs/case_result"}}}, "additionalProperties": false},
+    "repair_output": {"type": "object", "required": ["needed", "summary", "applied", "manifest"], "properties": {"needed": {"type": "boolean"}, "summary": {"type": ["string", "null"]}, "applied": {"type": "array", "items": {"type": "string"}}, "manifest": {"type": "object", "additionalProperties": {"type": "string"}}}, "additionalProperties": false},
+    "final_verification_output": {"type": "object", "required": ["plan_sha256", "candidate_manifest", "candidate_manifest_sha256", "verified_at"], "properties": {"plan_sha256": {"type": "string"}, "candidate_manifest": {"type": "object", "additionalProperties": {"type": "string"}}, "candidate_manifest_sha256": {"type": "string"}, "verified_at": {"type": "string"}}, "additionalProperties": false},
+    "delivery_output": {"type": "object", "required": ["candidate", "report"], "properties": {"candidate": {"type": "string"}, "report": {"type": "string"}}, "additionalProperties": false}
+  }
+}

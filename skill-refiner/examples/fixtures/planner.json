@@ -1,0 +1,6 @@
+{
+  "responses": {
+    "analyze_requirements": "analysis.json",
+    "build_plan": "plan.json"
+  }
+}

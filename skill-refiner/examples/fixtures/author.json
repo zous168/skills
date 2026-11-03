@@ -1,0 +1,15 @@
+{
+  "summary": "Create a deterministic greeting skill",
+  "changes": [
+    {
+      "path": "SKILL.md",
+      "operation": "write",
+      "content": "---\nname: greeting-skill\ndescription: Greet a supplied name from a deterministic command-line script. Use when a user asks for a simple personalized greeting.\n---\n\n# Greeting Skill\n\nRun `python scripts/hello.py NAME`. The command exits with code 2 when NAME is missing.\n"
+    },
+    {
+      "path": "scripts/hello.py",
+      "operation": "write",
+      "content": "from __future__ import annotations\n\nimport sys\n\n\ndef main(argv: list[str]) -> int:\n    if len(argv) != 2:\n        print('usage: hello.py NAME')\n        return 2\n    print(f'Hello, {argv[1]}!')\n    return 0\n\n\nif __name__ == '__main__':\n    raise SystemExit(main(sys.argv))\n"
+    }
+  ]
+}

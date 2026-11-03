@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+
+OBJECT = {"type": "object"}
+
+CASE_ASSERTION_SCHEMA = {
+    "type": "object",
+    "required": ["id", "kind", "expected"],
+    "properties": {
+        "id": {"type": "string", "pattern": r"^A-[A-Za-z0-9._-]+$"},
+        "kind": {
+            "enum": [
+                "exit_code",
+                "stdout_contains",
+                "json_schema",
+                "file_exists",
+            ]
+        },
+        "expected": {},
+    },
+    "additionalProperties": False,
+}
+
+TEST_CASE_SCHEMA = {
+    "type": "object",
+    "required": ["id", "kind", "requirement_ids", "argv", "assertions"],
+    "properties": {
+        "id": {"type": "string", "pattern": r"^C-[A-Za-z0-9._-]+$"},
+        "kind": {
+            "enum": ["normal", "boundary", "error", "negative", "regression", "acceptance"]
+        },
+        "requirement_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1},
+        },
+        "argv": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"},
+        },
+        "stdin": {"type": "string"},
+        "assertions": {
+            "type": "array",
+            "minItems": 1,
+            "items": CASE_ASSERTION_SCHEMA,
+        },
+        "timeout": {"type": "integer", "minimum": 1, "maximum": 600},
+    },
+    "additionalProperties": False,
+}
+
+ANALYSIS_SCHEMA = {
+    "type": "object",
+    "required": ["requirements"],
+    "properties": {"requirements": {"type": "array", "minItems": 1, "items": {"type": "object"}}},
+    "additionalProperties": False,
+}
+
+PLAN_SCHEMA = {
+    "type": "object",
+    "required": ["requirements", "development_cases", "acceptance_cases"],
+    "properties": {
+        "requirements": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+        "development_cases": {"type": "array", "minItems": 1, "items": TEST_CASE_SCHEMA},
+        "acceptance_cases": {"type": "array", "minItems": 1, "items": TEST_CASE_SCHEMA},
+    },
+    "additionalProperties": False,
+}
+
+REVIEW_SCHEMA = {
+    "type": "object",
+    "required": ["approved", "issues"],
+    "properties": {"approved": {"type": "boolean"}, "issues": {"type": "array", "items": {"type": "string"}}},
+    "additionalProperties": False,
+}
+
+PROPOSAL_SCHEMA = {
+    "type": "object",
+    "required": ["changes", "summary"],
+    "properties": {
+        "changes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["path", "operation"],
+                "properties": {
+                    "path": {"type": "string"},
+                    "operation": {"enum": ["write", "delete"]},
+                    "content": {"type": ["string", "null"]},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "summary": {"type": "string", "minLength": 1},
+    },
+    "additionalProperties": False,
+}

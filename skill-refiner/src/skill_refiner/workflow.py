@@ -127,6 +127,13 @@ class PipelineRun:
                      "every_requirement_has_a_direct_observable_assertion": True,
                      "refine_preservation_cases_name_unrelated_source_files_and_compare_hashes": True,
                      "documentation_cases_check_the_explicit_required_heading_and_behavior_text": True,
+                  },
+                  "work_item_contract": {
+                      "one_leaf_is_one_independently_observable_capability_or_invariant": True,
+                      "do_not_bundle_outputs_that_can_fail_independently": True,
+                      "no_arbitrary_fixed_item_count": True,
+                      "every_leaf_has_scope_dependencies_done_when_and_test_mappings": True,
+                      "all_requirements_and_all_test_cases_are_assigned": True,
                  }},
                 PLAN_SCHEMA, "build_plan",
             )
@@ -136,7 +143,18 @@ class PipelineRun:
     async def review_plan(self, _node_input: Any = None) -> dict[str, Any]:
         async def action() -> dict[str, Any]:
             self.review = await self.invoke(
-                "reviewer", {"task": "review frozen plan", "plan": self.kernel.load_plan().model_dump(mode="json")},
+                "reviewer", {
+                    "task": "review frozen plan",
+                    "plan": self.kernel.load_plan().model_dump(mode="json"),
+                    "required_checks": {
+                        "requirement_coverage": "every requirement is assigned to observable evidence",
+                        "atomic_work_items": "each leaf is one capability or invariant and does not bundle independent failures",
+                        "observable_done_when": "every done_when can be checked from artifacts or test evidence",
+                        "evidence_mapping": "all development and held-out acceptance cases are assigned consistently",
+                        "dependency_order": "dependencies are coherent and acyclic",
+                        "progress_handoff": "a parent can mirror leaves without inventing status or completion rules",
+                    },
+                },
                 REVIEW_SCHEMA, "review_plan",
             )
             return self.review
@@ -144,7 +162,13 @@ class PipelineRun:
 
     async def plan_gate(self, _node_input: Any = None) -> dict[str, Any]:
         def action() -> dict[str, Any]:
-            if not self.review.get("approved") or self.review.get("issues"):
+            checks = self.review.get("checks", {})
+            if (
+                not self.review.get("approved")
+                or self.review.get("issues")
+                or not checks
+                or not all(checks.values())
+            ):
                 raise NeedsUserDecision("plan review did not approve execution", details=self.review)
             return {"approved": True, "plan_only": self.plan_only}
         return await self.kernel.stage("plan_gate", action)
@@ -163,6 +187,18 @@ class PipelineRun:
             request = {
                 "task": "propose candidate skill files",
                 "requirements": list(plan.requirements),
+                "work_items": [
+                    {
+                        "id": item.id,
+                        "title": item.title,
+                        "scope": list(item.scope),
+                        "requirement_ids": list(item.requirement_ids),
+                        "depends_on": list(item.depends_on),
+                        "done_when": list(item.done_when),
+                        "development_case_ids": list(item.development_case_ids),
+                    }
+                    for item in plan.work_items
+                ],
                 "development_cases": [case.model_dump(mode="json") for case in plan.development_cases],
                 "current_candidate": self.candidate_context(),
             }

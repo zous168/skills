@@ -1,7 +1,7 @@
 {
   "schema_version": "skill-refiner.config/v1",
   "runtime_driver": "builtin_test",
-  "budgets": {"max_seconds": 120, "max_agent_calls": 10, "max_evaluations": 10, "max_repair_rounds": 1, "per_call_timeout": 30, "concurrency": 1},
+  "budgets": {"max_seconds": 120, "max_agent_calls": 10, "max_evaluations": 20, "max_repair_rounds": 1, "per_call_timeout": 30, "concurrency": 1},
   "roles": {
     "planner": {"kind": "fake", "fixture": "fixtures/planner.json"},
     "author": {"kind": "fake", "fixture": "fixtures/author.json"},

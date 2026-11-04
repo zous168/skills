@@ -15,7 +15,7 @@ from .stage_contracts import STAGES, controller_contract_hash, registry
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 IDENTITY = "skill-refiner"
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 EXPECTED_STAGE_IDS = (
     "freeze_inputs",
     "analyze_requirements",
@@ -47,12 +47,15 @@ REQUIRED_FILES = (
     "pyproject.toml",
     "scripts/refiner.py",
     "src/skill_refiner/cli.py",
+    "src/skill_refiner/contracts.py",
     "src/skill_refiner/kernel.py",
+    "src/skill_refiner/models.py",
     "src/skill_refiner/self_architecture.py",
     "src/skill_refiner/stage_contracts.py",
     "src/skill_refiner/store.py",
     "src/skill_refiner/workflow.py",
     "references/architecture.md",
+    "references/planning-and-progress.md",
     "references/persistence.md",
 )
 _TEXT_SUFFIXES = {

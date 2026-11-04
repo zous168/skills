@@ -5,7 +5,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from skill_refiner.contracts import PLAN_SCHEMA
+from skill_refiner.contracts import PLAN_SCHEMA, REVIEW_SCHEMA
 from skill_refiner.errors import VerificationError
 from skill_refiner.kernel import RefinerControlKernel
 from skill_refiner.models import CandidateProposal, RunMode
@@ -13,6 +13,26 @@ from skill_refiner.security import ensure_safe_tree, redact
 
 
 ROOT = Path(__file__).parents[1]
+
+
+def _work_item(
+    requirement_id: str = "REQ-1",
+    development_case_id: str = "C-greet",
+    acceptance_case_id: str = "C-accept",
+    *,
+    item_id: str = "W-greet",
+    depends_on: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "id": item_id,
+        "title": "Implement greeting",
+        "scope": ["scripts/hello.py"],
+        "requirement_ids": [requirement_id],
+        "depends_on": depends_on or [],
+        "done_when": ["The mapped cases pass with Kernel-owned evidence"],
+        "development_case_ids": [development_case_id],
+        "acceptance_case_ids": [acceptance_case_id],
+    }
 
 
 def test_candidate_proposal_is_strict() -> None:
@@ -78,6 +98,7 @@ def test_plan_schema_accepts_executable_cases() -> None:
     jsonschema.validate(
         {
             "requirements": [{"id": "REQ-1", "description": "greet a name"}],
+            "work_items": [_work_item()],
             "development_cases": [case],
             "acceptance_cases": [{**case, "id": "C-accept", "kind": "acceptance"}],
         },
@@ -94,6 +115,7 @@ def test_kernel_rejects_unconfigured_plan_executable(tmp_path: Path) -> None:
     )
     payload = {
         "requirements": [{"id": "REQ-1", "description": "greet a name"}],
+        "work_items": [_work_item(development_case_id="C-dev")],
         "development_cases": [
             {
                 "id": "C-dev",
@@ -142,8 +164,72 @@ def test_kernel_rejects_nonportable_model_assertions(
     }
     payload = {
         "requirements": [{"id": "REQ-1", "description": "greet a name"}],
+        "work_items": [_work_item(development_case_id="C-dev")],
         "development_cases": [case],
         "acceptance_cases": [{**case, "id": "C-accept", "kind": "acceptance"}],
     }
     with pytest.raises(VerificationError, match=message):
         kernel.make_plan(payload)
+
+
+def test_plan_schema_requires_work_items_and_structured_review_checks() -> None:
+    case = {
+        "id": "C-greet",
+        "kind": "normal",
+        "requirement_ids": ["REQ-1"],
+        "argv": ["{python}", "scripts/hello.py", "Alice"],
+        "assertions": [{"id": "A-exit", "kind": "exit_code", "expected": 0}],
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({
+            "requirements": [{"id": "REQ-1"}],
+            "development_cases": [case],
+            "acceptance_cases": [{**case, "id": "C-accept", "kind": "acceptance"}],
+        }, PLAN_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"approved": True, "issues": []}, REVIEW_SCHEMA)
+
+
+def test_kernel_rejects_uncovered_requirements_unknown_cases_and_cycles(tmp_path: Path) -> None:
+    def kernel(name: str) -> RefinerControlKernel:
+        return RefinerControlKernel.initialize(
+            tmp_path / name,
+            RunMode.CREATE,
+            ROOT / "examples" / "requirements.md",
+            ROOT / "examples" / "config.builtin-test.json",
+        )
+
+    dev = {
+        "id": "C-greet", "kind": "normal", "requirement_ids": ["REQ-1"],
+        "argv": ["{python}", "scripts/hello.py", "Alice"],
+        "assertions": [{"id": "A-dev", "kind": "exit_code", "expected": 0}],
+    }
+    acceptance = {
+        **dev, "id": "C-accept", "kind": "acceptance",
+        "assertions": [{"id": "A-accept", "kind": "exit_code", "expected": 0}],
+    }
+    base = {
+        "requirements": [{"id": "REQ-1"}],
+        "development_cases": [dev],
+        "acceptance_cases": [acceptance],
+    }
+
+    with pytest.raises(VerificationError, match="not covered"):
+        kernel("uncovered").make_plan({
+            **base,
+            "requirements": [{"id": "REQ-1"}, {"id": "REQ-2"}],
+            "work_items": [_work_item()],
+        })
+    with pytest.raises(VerificationError, match="unknown case ids"):
+        kernel("unknown-case").make_plan({
+            **base,
+            "work_items": [_work_item(development_case_id="C-unknown")],
+        })
+    with pytest.raises(VerificationError, match="dependency cycle"):
+        kernel("cycle").make_plan({
+            **base,
+            "work_items": [
+                _work_item(item_id="W-one", depends_on=["W-two"]),
+                _work_item(item_id="W-two", depends_on=["W-one"]),
+            ],
+        })

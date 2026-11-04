@@ -356,17 +356,20 @@ class RefinerControlKernel:
     def make_plan(self, payload: dict[str, Any]) -> FrozenPlan:
         run = self.run
         value = {
-            "schema_version": "skill-refiner.plan/v1",
+            "schema_version": "skill-refiner.plan/v2",
             "requirements_sha256": run["requirements_sha256"],
             "config_sha256": run["config_sha256"],
             "requirements": payload.get("requirements", []),
+            "work_items": payload.get("work_items", []),
             "development_cases": payload.get("development_cases", []),
             "acceptance_cases": payload.get("acceptance_cases", []),
             "stage_contracts": [record.model_dump(mode="json") for record in registry().stages],
         }
         plan = FrozenPlan.model_validate(value)
-        if not plan.requirements or not plan.development_cases or not plan.acceptance_cases:
-            raise VerificationError("plan must include requirements plus development and held-out acceptance cases")
+        if not plan.requirements or not plan.work_items or not plan.development_cases or not plan.acceptance_cases:
+            raise VerificationError(
+                "plan must include requirements, granular work items, development cases and held-out acceptance cases"
+            )
         allowed_executors = {"{python}", *(f"{{executor:{name}}}" for name in self.config.executors)}
         for case in (*plan.development_cases, *plan.acceptance_cases):
             if not case.argv or case.argv[0] not in allowed_executors:
@@ -390,11 +393,110 @@ class RefinerControlKernel:
                     )
         development_ids = {case.id for case in plan.development_cases}
         acceptance_ids = {case.id for case in plan.acceptance_cases}
+        if len(development_ids) != len(plan.development_cases):
+            raise VerificationError("development case ids must be unique")
+        if len(acceptance_ids) != len(plan.acceptance_cases):
+            raise VerificationError("acceptance case ids must be unique")
         if development_ids & acceptance_ids:
             raise VerificationError("acceptance case ids must be held out from development")
+        self._validate_work_items(plan)
         write_json(self.run_dir / "plan.json", plan.model_dump(mode="json"))
         self.store.put_json("plan/frozen.json", plan.model_dump(mode="json"))
         return plan
+
+    @staticmethod
+    def _validate_work_items(plan: FrozenPlan) -> None:
+        requirement_ids = [item.get("id") for item in plan.requirements]
+        if any(not isinstance(item, str) or not item for item in requirement_ids):
+            raise VerificationError("every requirement must have a non-empty string id")
+        if len(set(requirement_ids)) != len(requirement_ids):
+            raise VerificationError("requirement ids must be unique")
+
+        work_ids = [item.id for item in plan.work_items]
+        if len(set(work_ids)) != len(work_ids):
+            raise VerificationError("work item ids must be unique")
+        work_id_set = set(work_ids)
+        requirement_id_set = set(requirement_ids)
+        development = {case.id: case for case in plan.development_cases}
+        acceptance = {case.id: case for case in plan.acceptance_cases}
+
+        assigned_requirements: set[str] = set()
+        assigned_development: set[str] = set()
+        assigned_acceptance: set[str] = set()
+        graph: dict[str, tuple[str, ...]] = {}
+        for item in plan.work_items:
+            for field_name, values in (
+                ("scope", item.scope),
+                ("requirement_ids", item.requirement_ids),
+                ("depends_on", item.depends_on),
+                ("done_when", item.done_when),
+                ("development_case_ids", item.development_case_ids),
+                ("acceptance_case_ids", item.acceptance_case_ids),
+            ):
+                if len(set(values)) != len(values):
+                    raise VerificationError(f"work item {item.id} has duplicate {field_name}")
+            unknown_requirements = set(item.requirement_ids) - requirement_id_set
+            if unknown_requirements:
+                raise VerificationError(
+                    f"work item {item.id} references unknown requirements: {sorted(unknown_requirements)}"
+                )
+            unknown_dependencies = set(item.depends_on) - work_id_set
+            if unknown_dependencies:
+                raise VerificationError(
+                    f"work item {item.id} references unknown dependencies: {sorted(unknown_dependencies)}"
+                )
+            if item.id in item.depends_on:
+                raise VerificationError(f"work item {item.id} cannot depend on itself")
+            unknown_development = set(item.development_case_ids) - set(development)
+            unknown_acceptance = set(item.acceptance_case_ids) - set(acceptance)
+            if unknown_development or unknown_acceptance:
+                raise VerificationError(
+                    f"work item {item.id} references unknown case ids: "
+                    f"development={sorted(unknown_development)}, acceptance={sorted(unknown_acceptance)}"
+                )
+            item_requirements = set(item.requirement_ids)
+            for case_id in item.development_case_ids:
+                if not item_requirements.intersection(development[case_id].requirement_ids):
+                    raise VerificationError(
+                        f"development case {case_id} does not cover a requirement of work item {item.id}"
+                    )
+            for case_id in item.acceptance_case_ids:
+                if not item_requirements.intersection(acceptance[case_id].requirement_ids):
+                    raise VerificationError(
+                        f"acceptance case {case_id} does not cover a requirement of work item {item.id}"
+                    )
+            assigned_requirements.update(item.requirement_ids)
+            assigned_development.update(item.development_case_ids)
+            assigned_acceptance.update(item.acceptance_case_ids)
+            graph[item.id] = item.depends_on
+
+        uncovered_requirements = requirement_id_set - assigned_requirements
+        if uncovered_requirements:
+            raise VerificationError(f"requirements are not covered by work items: {sorted(uncovered_requirements)}")
+        unassigned_development = set(development) - assigned_development
+        unassigned_acceptance = set(acceptance) - assigned_acceptance
+        if unassigned_development or unassigned_acceptance:
+            raise VerificationError(
+                "test cases are not assigned to work items: "
+                f"development={sorted(unassigned_development)}, acceptance={sorted(unassigned_acceptance)}"
+            )
+
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(work_id: str) -> None:
+            if work_id in visiting:
+                raise VerificationError(f"work item dependency cycle includes {work_id}")
+            if work_id in visited:
+                return
+            visiting.add(work_id)
+            for dependency in graph[work_id]:
+                visit(dependency)
+            visiting.remove(work_id)
+            visited.add(work_id)
+
+        for work_id in work_ids:
+            visit(work_id)
 
     def load_plan(self) -> FrozenPlan:
         plan = FrozenPlan.model_validate(self.store.get_json("plan/frozen.json"))

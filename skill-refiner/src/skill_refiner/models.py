@@ -133,11 +133,23 @@ class TestCase(StrictModel):
     timeout: int = Field(default=60, ge=1, le=600)
 
 
+class PlanWorkItem(StrictModel):
+    id: str = Field(pattern=r"^W-[A-Za-z0-9._-]+$")
+    title: str = Field(min_length=1, max_length=160)
+    scope: tuple[str, ...] = Field(min_length=1)
+    requirement_ids: tuple[str, ...] = Field(min_length=1)
+    depends_on: tuple[str, ...] = ()
+    done_when: tuple[str, ...] = Field(min_length=1)
+    development_case_ids: tuple[str, ...] = Field(min_length=1)
+    acceptance_case_ids: tuple[str, ...] = Field(min_length=1)
+
+
 class FrozenPlan(StrictModel):
-    schema_version: Literal["skill-refiner.plan/v1"]
+    schema_version: Literal["skill-refiner.plan/v2"]
     requirements_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     config_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     requirements: tuple[dict[str, Any], ...]
+    work_items: tuple[PlanWorkItem, ...] = Field(min_length=1)
     development_cases: tuple[TestCase, ...]
     acceptance_cases: tuple[TestCase, ...]
     stage_contracts: tuple[dict[str, Any], ...]
@@ -225,9 +237,19 @@ class AnalysisOutput(StrictModel):
     requirements: tuple[dict[str, Any], ...]
 
 
+class ReviewChecks(StrictModel):
+    requirement_coverage: bool
+    atomic_work_items: bool
+    observable_done_when: bool
+    evidence_mapping: bool
+    dependency_order: bool
+    progress_handoff: bool
+
+
 class ReviewOutput(StrictModel):
     approved: bool
     issues: tuple[str, ...]
+    checks: ReviewChecks
 
 
 class PlanGateOutput(StrictModel):
@@ -267,6 +289,30 @@ class EvaluationReport(StrictModel):
     phase: Literal["development", "regression", "acceptance"]
     passed: bool
     results: tuple[CaseExecutionResult, ...]
+
+
+class WorkItemProgressRecord(StrictModel):
+    id: str
+    title: str
+    status: Literal["pending", "in_progress", "verified", "blocked"]
+    requirement_ids: tuple[str, ...]
+    scope: tuple[str, ...]
+    depends_on: tuple[str, ...]
+    done_when: tuple[str, ...]
+    development_case_ids: tuple[str, ...]
+    acceptance_case_ids: tuple[str, ...]
+    evidence_refs: tuple[str, ...] = ()
+
+
+class ProgressProjection(StrictModel):
+    schema_version: Literal["skill-refiner.progress/v1"]
+    run_id: str
+    run_status: RunStatus
+    updated_at: str
+    current_stage: str | None
+    current_work_item_id: str | None
+    counts: dict[str, int]
+    work_items: tuple[WorkItemProgressRecord, ...]
 
 
 class RepairOutput(StrictModel):

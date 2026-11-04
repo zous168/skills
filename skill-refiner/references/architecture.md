@@ -13,6 +13,11 @@ Model or command adapters can only propose JSON. They cannot mark a test as
 passed: the Kernel independently runs the plan's commands and evaluates every
 assertion from exit code, stdout, files, JSON schema, or a manifest.
 
+The frozen plan includes schema-bound work items. The Kernel owns structural
+coverage and dependency validation; the Reviewer owns the semantic atomicity
+check. `progress.json` is derived from SQLite and evaluation artifacts, never
+from a model's completion claim.
+
 Acceptance cases are present in the frozen plan but withheld from author and
 repair requests. `final_verify` requires the acceptance stage to have passed
 and binds the candidate manifest to immutable verification evidence.

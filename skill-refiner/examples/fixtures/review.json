@@ -1,1 +1,12 @@
-{"approved": true, "issues": []}
+{
+  "approved": true,
+  "issues": [],
+  "checks": {
+    "requirement_coverage": true,
+    "atomic_work_items": true,
+    "observable_done_when": true,
+    "evidence_mapping": true,
+    "dependency_order": true,
+    "progress_handoff": true
+  }
+}

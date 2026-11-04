@@ -26,6 +26,12 @@ The live `stages.json` index is validated by
 `schemas/v1/stage-contracts.schema.json`. Artifact and attempt structures are
 defined by `stage-artifacts.schema.json` and `stage-attempt.schema.json`.
 
+The live `progress.json` projection uses `skill-refiner.progress/v1` and is
+rebuilt whenever state is exported. It maps frozen plan work items to
+Kernel-owned development, regression, and acceptance evidence. It is a status
+projection, not a second authority: SQLite and immutable artifacts remain the
+source of truth.
+
 All JSON artifacts are materialized at their logical paths and copied into the
 SHA-256 object store. Resume re-reads both copies, reloads packaged schemas,
 checks the frozen contract and controller contract hash, validates every

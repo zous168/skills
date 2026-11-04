@@ -10,7 +10,15 @@ from typing import Any, Iterator
 
 from .errors import TamperError
 from .hashing import digest_bytes, digest_file, write_json
-from .models import StageIndex, StageIndexRecord
+from .models import (
+    EvaluationReport,
+    FrozenPlan,
+    ProgressProjection,
+    RunStatus,
+    StageIndex,
+    StageIndexRecord,
+    WorkItemProgressRecord,
+)
 
 
 def utc_now() -> str:
@@ -190,6 +198,12 @@ class EvidenceStore:
             run = db.execute("SELECT * FROM runs").fetchone()
             stages = [dict(row) for row in db.execute("SELECT * FROM stages ORDER BY ordinal")]
         value = {"run": dict(run) if run else None, "stages": stages}
+        if run is not None:
+            progress = self._progress_projection(dict(run), stages)
+            if progress is not None:
+                progress_value = progress.model_dump(mode="json")
+                value["progress"] = progress_value
+                write_json(self.run_dir / "progress.json", progress_value)
         write_json(self.run_dir / "state.json", value)
         with self.connect() as db:
             contract = db.execute("SELECT content_sha256 FROM artifacts WHERE logical_path='contracts/stages.json'").fetchone()
@@ -213,4 +227,101 @@ class EvidenceStore:
             )
             write_json(self.run_dir / "stages.json", index.model_dump(mode="json"))
         return value
+
+    def _progress_projection(
+        self, run: dict[str, Any], stages: list[dict[str, Any]],
+    ) -> ProgressProjection | None:
+        with self.connect() as db:
+            plan_row = db.execute(
+                "SELECT content_sha256 FROM artifacts WHERE logical_path='plan/frozen.json'"
+            ).fetchone()
+        if plan_row is None:
+            return None
+
+        plan = FrozenPlan.model_validate(self.get_json("plan/frozen.json"))
+        stage_rows = {row["stage_id"]: row for row in stages}
+        reports: dict[str, tuple[EvaluationReport, str]] = {}
+        for stage_id in ("development_evaluation", "regression_evaluation", "acceptance_evaluation"):
+            row = stage_rows[stage_id]
+            if row["status"] != "passed" or not row["attempt"] or not row["output_sha256"]:
+                continue
+            logical_path = f"stages/{stage_id}/{row['attempt']}/output.json"
+            reports[stage_id] = (EvaluationReport.model_validate(self.get_json(logical_path)), logical_path)
+
+        current_stage = next(
+            (row["stage_id"] for row in stages if row["status"] == "running"),
+            next((row["stage_id"] for row in stages if row["status"] not in {"passed", "skipped"}), None),
+        )
+        candidate_started = any(
+            row["status"] in {"running", "passed", "failed"}
+            for row in stages
+            if row["ordinal"] >= stage_rows["generate_candidate"]["ordinal"]
+        )
+
+        records: list[WorkItemProgressRecord] = []
+        for item in plan.work_items:
+            evidence_refs: list[str] = []
+            mapped_results: dict[str, dict[str, bool]] = {}
+            for stage_id, (report, logical_path) in reports.items():
+                result_map = {result.case_id: result.passed for result in report.results}
+                wanted = item.acceptance_case_ids if stage_id == "acceptance_evaluation" else item.development_case_ids
+                selected = {case_id: result_map[case_id] for case_id in wanted if case_id in result_map}
+                if selected:
+                    mapped_results[stage_id] = selected
+                    evidence_refs.append(logical_path)
+
+            blocked = any(not passed for results in mapped_results.values() for passed in results.values())
+            development_verified = all(
+                stage_id in mapped_results
+                and set(mapped_results[stage_id]) == set(item.development_case_ids)
+                and all(mapped_results[stage_id].values())
+                for stage_id in ("development_evaluation", "regression_evaluation")
+            )
+            acceptance_verified = (
+                "acceptance_evaluation" in mapped_results
+                and set(mapped_results["acceptance_evaluation"]) == set(item.acceptance_case_ids)
+                and all(mapped_results["acceptance_evaluation"].values())
+            )
+            if blocked:
+                status = "blocked"
+            elif development_verified and acceptance_verified:
+                status = "verified"
+            elif candidate_started:
+                status = "in_progress"
+            else:
+                status = "pending"
+            records.append(WorkItemProgressRecord(
+                id=item.id,
+                title=item.title,
+                status=status,
+                requirement_ids=item.requirement_ids,
+                scope=item.scope,
+                depends_on=item.depends_on,
+                done_when=item.done_when,
+                development_case_ids=item.development_case_ids,
+                acceptance_case_ids=item.acceptance_case_ids,
+                evidence_refs=tuple(evidence_refs),
+            ))
+
+        status_by_id = {record.id: record.status for record in records}
+        current_work_item_id = next((
+            record.id
+            for record in records
+            if record.status != "verified"
+            and all(status_by_id.get(dependency) == "verified" for dependency in record.depends_on)
+        ), next((record.id for record in records if record.status != "verified"), None))
+        counts = {
+            status: sum(record.status == status for record in records)
+            for status in ("pending", "in_progress", "verified", "blocked")
+        }
+        return ProgressProjection(
+            schema_version="skill-refiner.progress/v1",
+            run_id=run["run_id"],
+            run_status=RunStatus(run["status"]),
+            updated_at=run["updated_at"],
+            current_stage=current_stage,
+            current_work_item_id=current_work_item_id,
+            counts=counts,
+            work_items=tuple(records),
+        )
 

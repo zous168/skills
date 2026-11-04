@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from .contracts import PLAN_SCHEMA, REVIEW_SCHEMA
 from .hashing import digest_file, digest_json
 from .models import (
     AnalysisOutput,
@@ -118,6 +119,14 @@ def schema_hash(relative: str) -> str:
 def controller_contract_hash() -> str:
     return digest_json({
         "registry": registry().model_dump(mode="json"),
+        "stage_output_models": {
+            stage_id: model.model_json_schema()
+            for stage_id, model in sorted(STAGE_OUTPUT_MODELS.items())
+        },
+        "adapter_response_schemas": {
+            "plan": PLAN_SCHEMA,
+            "review": REVIEW_SCHEMA,
+        },
         "schemas": {
             relative: schema_hash(relative)
             for relative in (SCHEMA_PATH, ATTEMPT_SCHEMA_PATH, CONTRACT_SCHEMA_PATH, STAGES_SCHEMA_PATH)

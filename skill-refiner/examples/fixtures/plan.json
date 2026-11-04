@@ -3,6 +3,28 @@
     {"id": "R-greet", "text": "Greet a supplied name"},
     {"id": "R-missing", "text": "Fail when a name is missing"}
   ],
+  "work_items": [
+    {
+      "id": "W-greet",
+      "title": "Implement deterministic greeting",
+      "scope": ["scripts/hello.py greeting path", "SKILL.md usage contract"],
+      "requirement_ids": ["R-greet"],
+      "depends_on": [],
+      "done_when": ["A supplied name produces the exact greeting and exit code 0"],
+      "development_case_ids": ["C-dev-greet"],
+      "acceptance_case_ids": ["C-accept-held-out"]
+    },
+    {
+      "id": "W-missing",
+      "title": "Reject a missing name",
+      "scope": ["scripts/hello.py missing-argument path"],
+      "requirement_ids": ["R-missing"],
+      "depends_on": ["W-greet"],
+      "done_when": ["A missing name prints usage and exits with code 2"],
+      "development_case_ids": ["C-dev-missing"],
+      "acceptance_case_ids": ["C-accept-missing"]
+    }
+  ],
   "development_cases": [
     {
       "id": "C-dev-greet",
@@ -34,6 +56,16 @@
       "assertions": [
         {"id": "A-accept-exit", "kind": "exit_code", "expected": 0},
         {"id": "A-accept-text", "kind": "stdout_contains", "expected": "Hello, Bob!"}
+      ]
+    },
+    {
+      "id": "C-accept-missing",
+      "kind": "acceptance",
+      "requirement_ids": ["R-missing"],
+      "argv": ["{python}", "scripts/hello.py"],
+      "assertions": [
+        {"id": "A-accept-missing-exit", "kind": "exit_code", "expected": 2},
+        {"id": "A-accept-missing-text", "kind": "stdout_contains", "expected": "usage: hello.py NAME"}
       ]
     }
   ]

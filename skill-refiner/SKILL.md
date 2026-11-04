@@ -23,9 +23,18 @@ path. Run `doctor` before starting a workflow.
 4. Run `create` for a new skill or `refine --source <skill-dir>` for an
    existing skill. Use `--plan-only` to freeze and review the plan without
    generating files.
-5. Inspect `state.json`, `events.jsonl`, `plan.json`, `report.md`, and the
+5. Inspect `plan.json.work_items` before execution. Each item is one observable
+   capability or invariant with its own scope, dependencies, `done_when`, and
+   development/acceptance evidence mappings. Do not collapse independent work
+   items into one parent task or treat a frozen plan as completed work.
+6. Track execution from `progress.json`, `state.json`, and Kernel-owned stage
+   evidence. A work item is verified only after all mapped development,
+   regression, and held-out acceptance cases pass. A stale `running` record is
+   not proof that a process is alive; report live execution only when the host
+   can observe the process or session.
+7. Inspect `state.json`, `events.jsonl`, `plan.json`, `report.md`, and the
    content-addressed artifacts in the run directory.
-6. Run `verify <run-dir>`. Only then run `adopt <run-dir> <empty-destination>`.
+8. Run `verify <run-dir>`. Only then run `adopt <run-dir> <empty-destination>`.
 
 Never edit frozen inputs, plan evidence, or test evidence inside a run. Resume
 with `resume <run-dir>` after repairing an external adapter or environment.
@@ -42,6 +51,9 @@ adapter envelope. See [references/persistence.md](references/persistence.md)
 for the versioned per-stage persistence and recovery contract. For an
 independent external model backend, see
 [references/deepseek-adapter.md](references/deepseek-adapter.md).
+Read [references/planning-and-progress.md](references/planning-and-progress.md)
+when creating a plan, reporting progress, or handing a run to GoalExecutor or
+another parent orchestrator.
 For the optional current-host Python SDK backend, see
 [references/adapters.md](references/adapters.md) and
 `examples/config.cursor-sdk.json`; do not claim live availability unless its
